@@ -1,0 +1,69 @@
+{
+  "name": "webview.io",
+  "version": "1.0.0",
+  "description": "Easy and friendly API to connect and interact between React Native and WebView with enhanced security, reliability, and modern async/await support.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "private": false,
+  "scripts": {
+    "compile": "rimraf ./dist && tsc",
+    "test": "yarn run compile && yarn run test:types && yarn run test:unit",
+    "test:types": "tsd",
+    "test:unit": "nyc mocha --require ts-node/register --reporter spec --slow 200 --bail --timeout 10000 test/webview.io.ts",
+    "prepack": "yarn run compile"
+  },
+  "dependencies": {
+    "@types/node": "^24.6.0",
+    "events": "^3.3.0"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "react-native-webview": ">=11.0.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^9.1.0",
+    "@types/react": "^18.0.0",
+    "expect.js": "^0.3.1",
+    "mocha": "^9.2.0",
+    "nyc": "^15.1.0",
+    "react-native-webview": "^13.16.0",
+    "rimraf": "^3.0.2",
+    "ts-node": "^10.9.0",
+    "tsd": "^0.24.1",
+    "typescript": "^4.5.5"
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "README.md"
+  ],
+  "directories": {
+    "example": "example/",
+    "test": "test/"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/fabrice8/webview.io"
+  },
+  "keywords": [
+    "react-native",
+    "webview",
+    "bridge",
+    "communication",
+    "realtime",
+    "events",
+    "mobile",
+    "cross-origin",
+    "secure",
+    "async",
+    "promise",
+    "react-native-webview",
+    "messaging",
+    "io"
+  ],
+  "author": "Fabrice K.E.M",
+  "engines": {
+    "node": ">=12.0.0"
+  }
+}
