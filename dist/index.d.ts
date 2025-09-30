@@ -39,7 +39,7 @@ export type QueuedMessage = {
     fn?: AckFunction;
     timestamp: number;
 };
-export default class IOF {
+export default class WIO {
     Events: RegisteredEvents;
     peer: Peer;
     options: Options;

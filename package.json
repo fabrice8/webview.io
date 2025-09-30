@@ -13,7 +13,6 @@
     "prepack": "yarn run compile"
   },
   "dependencies": {
-    "@types/node": "^24.6.0",
     "events": "^3.3.0"
   },
   "peerDependencies": {
@@ -22,6 +21,7 @@
   },
   "devDependencies": {
     "@types/mocha": "^9.1.0",
+    "@types/node": "^24.6.0",
     "@types/react": "^18.0.0",
     "expect.js": "^0.3.1",
     "mocha": "^9.2.0",

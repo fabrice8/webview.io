@@ -50,8 +50,8 @@ var RESERVED_EVENTS = [
     '__heartbeat',
     '__heartbeat_response'
 ];
-var IOF = /** @class */ (function () {
-    function IOF(options) {
+var WIO = /** @class */ (function () {
+    function WIO(options) {
         if (options === void 0) { options = {}; }
         this.messageQueue = [];
         this.messageRateTracker = [];
@@ -65,18 +65,18 @@ var IOF = /** @class */ (function () {
         if (options.type)
             this.peer.type = options.type;
     }
-    IOF.prototype.debug = function () {
+    WIO.prototype.debug = function () {
         var args = [];
         for (var _i = 0; _i < arguments.length; _i++) {
             args[_i] = arguments[_i];
         }
         this.options.debug && console.debug.apply(console, args);
     };
-    IOF.prototype.isConnected = function () {
+    WIO.prototype.isConnected = function () {
         return !!this.peer.connected && !!this.peer.webViewRef;
     };
     // Enhanced connection health monitoring
-    IOF.prototype.startHeartbeat = function () {
+    WIO.prototype.startHeartbeat = function () {
         var _this = this;
         if (!this.options.heartbeatInterval)
             return;
@@ -101,14 +101,14 @@ var IOF = /** @class */ (function () {
             }
         }, this.options.heartbeatInterval);
     };
-    IOF.prototype.stopHeartbeat = function () {
+    WIO.prototype.stopHeartbeat = function () {
         if (!this.heartbeatTimer)
             return;
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = undefined;
     };
     // Handle connection loss and potential reconnection
-    IOF.prototype.handleConnectionLoss = function () {
+    WIO.prototype.handleConnectionLoss = function () {
         if (!this.peer.connected)
             return;
         this.peer.connected = false;
@@ -118,7 +118,7 @@ var IOF = /** @class */ (function () {
             && this.reconnectAttempts < this.maxReconnectAttempts
             && this.attemptReconnection();
     };
-    IOF.prototype.attemptReconnection = function () {
+    WIO.prototype.attemptReconnection = function () {
         var _this = this;
         if (this.reconnectTimer)
             return;
@@ -143,7 +143,7 @@ var IOF = /** @class */ (function () {
         }, delay);
     };
     // Message rate limiting
-    IOF.prototype.checkRateLimit = function () {
+    WIO.prototype.checkRateLimit = function () {
         if (!this.options.maxMessagesPerSecond)
             return true;
         var now = Date.now(), aSecondAgo = now - 1000;
@@ -162,7 +162,7 @@ var IOF = /** @class */ (function () {
         return true;
     };
     // Queue messages when not connected
-    IOF.prototype.queueMessage = function (_event, payload, fn) {
+    WIO.prototype.queueMessage = function (_event, payload, fn) {
         if (this.messageQueue.length >= this.options.messageQueueSize) {
             // Remove oldest message
             var removed = this.messageQueue.shift();
@@ -177,7 +177,7 @@ var IOF = /** @class */ (function () {
         this.debug("[".concat(this.peer.type, "] Queued message: ").concat(_event, " (queue size: ").concat(this.messageQueue.length, ")"));
     };
     // Process queued messages when connection is established
-    IOF.prototype.processMessageQueue = function () {
+    WIO.prototype.processMessageQueue = function () {
         var _this = this;
         if (!this.isConnected() || this.messageQueue.length === 0)
             return;
@@ -196,7 +196,7 @@ var IOF = /** @class */ (function () {
     /**
      * Establish a connection with WebView
      */
-    IOF.prototype.initiate = function (webViewRef, origin) {
+    WIO.prototype.initiate = function (webViewRef, origin) {
         if (!webViewRef || !origin)
             throw new Error('Invalid Connection initiation arguments');
         if (this.peer.type === 'EMBEDDED')
@@ -215,7 +215,7 @@ var IOF = /** @class */ (function () {
      * Listening to connection from the WebView host
      * Note: In React Native context, this is handled by injected JavaScript
      */
-    IOF.prototype.listen = function (hostOrigin) {
+    WIO.prototype.listen = function (hostOrigin) {
         this.peer.type = 'EMBEDDED'; // iframe.io-rn connection listener is automatically set as EMBEDDED
         this.peer.connected = false;
         this.reconnectAttempts = 0;
@@ -226,7 +226,7 @@ var IOF = /** @class */ (function () {
      * Handle incoming message from WebView
      * Called by React Native component via onMessage prop
      */
-    IOF.prototype.handleMessage = function (event) {
+    WIO.prototype.handleMessage = function (event) {
         try {
             var data = JSON.parse(event.nativeEvent.data);
             // Enhanced security: check valid message structure
@@ -268,7 +268,7 @@ var IOF = /** @class */ (function () {
             });
         }
     };
-    IOF.prototype.fire = function (_event, payload, cid) {
+    WIO.prototype.fire = function (_event, payload, cid) {
         var _this = this;
         // Volatile event - check if any listeners exist
         if (!this.Events[_event] && !this.Events[_event + '--@once']) {
@@ -310,7 +310,7 @@ var IOF = /** @class */ (function () {
             }
         });
     };
-    IOF.prototype.emit = function (_event, payload, fn) {
+    WIO.prototype.emit = function (_event, payload, fn) {
         var _a;
         // Check rate limiting
         if (!this.checkRateLimit())
@@ -368,7 +368,7 @@ var IOF = /** @class */ (function () {
         }
         return this;
     };
-    IOF.prototype.on = function (_event, fn) {
+    WIO.prototype.on = function (_event, fn) {
         // Add Event listener
         if (!this.Events[_event])
             this.Events[_event] = [];
@@ -376,7 +376,7 @@ var IOF = /** @class */ (function () {
         this.debug("[".concat(this.peer.type, "] New <").concat(_event, "> listener on"));
         return this;
     };
-    IOF.prototype.once = function (_event, fn) {
+    WIO.prototype.once = function (_event, fn) {
         // Add Once Event listener
         _event += '--@once';
         if (!this.Events[_event])
@@ -385,7 +385,7 @@ var IOF = /** @class */ (function () {
         this.debug("[".concat(this.peer.type, "] New <").concat(_event, " once> listener on"));
         return this;
     };
-    IOF.prototype.off = function (_event, fn) {
+    WIO.prototype.off = function (_event, fn) {
         // Remove Event listener
         if (fn && this.Events[_event]) {
             // Remove specific listener if provided
@@ -404,14 +404,14 @@ var IOF = /** @class */ (function () {
         this.debug("[".concat(this.peer.type, "] <").concat(_event, "> listener off"));
         return this;
     };
-    IOF.prototype.removeListeners = function (fn) {
+    WIO.prototype.removeListeners = function (fn) {
         // Clear all event listeners
         this.Events = {};
         typeof fn == 'function' && fn();
         this.debug("[".concat(this.peer.type, "] All listeners removed"));
         return this;
     };
-    IOF.prototype.emitAsync = function (_event, payload, timeout) {
+    WIO.prototype.emitAsync = function (_event, payload, timeout) {
         var _this = this;
         if (timeout === void 0) { timeout = 5000; }
         return new Promise(function (resolve, reject) {
@@ -436,11 +436,11 @@ var IOF = /** @class */ (function () {
             }
         });
     };
-    IOF.prototype.onceAsync = function (_event) {
+    WIO.prototype.onceAsync = function (_event) {
         var _this = this;
         return new Promise(function (resolve) { return _this.once(_event, resolve); });
     };
-    IOF.prototype.connectAsync = function (timeout) {
+    WIO.prototype.connectAsync = function (timeout) {
         var _this = this;
         return new Promise(function (resolve, reject) {
             if (_this.isConnected())
@@ -457,14 +457,14 @@ var IOF = /** @class */ (function () {
         });
     };
     // Clean up all resources
-    IOF.prototype.cleanup = function () {
+    WIO.prototype.cleanup = function () {
         this.stopHeartbeat();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = undefined;
         }
     };
-    IOF.prototype.disconnect = function (fn) {
+    WIO.prototype.disconnect = function (fn) {
         // Cleanup on disconnect
         this.cleanup();
         this.peer.connected = false;
@@ -480,7 +480,7 @@ var IOF = /** @class */ (function () {
         return this;
     };
     // Get connection statistics
-    IOF.prototype.getStats = function () {
+    WIO.prototype.getStats = function () {
         return {
             connected: this.isConnected(),
             peerType: this.peer.type,
@@ -493,7 +493,7 @@ var IOF = /** @class */ (function () {
         };
     };
     // Clear message queue manually
-    IOF.prototype.clearQueue = function () {
+    WIO.prototype.clearQueue = function () {
         var queueSize = this.messageQueue.length;
         this.messageQueue = [];
         this.debug("[".concat(this.peer.type, "] Cleared ").concat(queueSize, " queued messages"));
@@ -503,9 +503,9 @@ var IOF = /** @class */ (function () {
      * Get injected JavaScript for WebView
      * Sets up the EMBEDDED side of the bridge
      */
-    IOF.prototype.getInjectedJavaScript = function () {
-        return "\n      (function() {\n        const RESERVED_EVENTS = ['ping', 'pong', '__heartbeat', '__heartbeat_response'];\n        \n        window._iofRN = {\n          type: 'EMBEDDED',\n          connected: false,\n          Events: {},\n          messageQueue: [],\n          \n          ackId: function(){\n            const\n            rmin = 100000,\n            rmax = 999999,\n            timestamp = Date.now(),\n            random = Math.floor( Math.random() * ( rmax - rmin + 1 ) + rmin );\n\n            return timestamp + '_' + random;\n          },\n          \n          fire: function( _event, payload, cid ){\n            if( !this.Events[_event] && !this.Events[_event + '--@once'] ) return;\n            \n            const ackFn = cid\n              ? ( error, ...args ) => {\n                  this.emit( _event + '--' + cid + '--@ack', { error: error || false, args } );\n                }\n              : undefined;\n            \n            let listeners = [];\n            if( this.Events[_event + '--@once'] ){\n              _event += '--@once';\n              listeners = this.Events[_event];\n              delete this.Events[_event];\n            }\n            else listeners = this.Events[_event] || [];\n            \n            listeners.forEach( fn => {\n              try { payload !== undefined ? fn( payload, ackFn ) : fn( ackFn ); }\n              catch( error ){ console.error('[EMBEDDED] Listener error:', error); }\n            });\n          },\n          \n          emit: function( _event, payload, fn ){\n            if( typeof payload === 'function' ){\n              fn = payload;\n              payload = undefined;\n            }\n            \n            if( !this.connected && !RESERVED_EVENTS.includes(_event) ){\n              this.messageQueue.push({ _event, payload, fn, timestamp: Date.now() });\n              return;\n            }\n            \n            try {\n              let cid;\n              if( typeof fn === 'function' ){\n                cid = this.ackId();\n                this.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) );\n              }\n              \n              const messageData = {\n                _event,\n                payload,\n                cid,\n                timestamp: Date.now()\n              };\n              \n              window.ReactNativeWebView.postMessage( JSON.stringify( messageData ) );\n            }\n            catch( error ){\n              console.error('[EMBEDDED] Emit error:', error);\n              typeof fn === 'function' && fn( String(error) );\n            }\n          },\n          \n          on: function( _event, fn ){\n            if( !this.Events[_event] ) this.Events[_event] = [];\n            this.Events[_event].push( fn );\n          },\n          \n          once: function( _event, fn ){\n            _event += '--@once';\n            if( !this.Events[_event] ) this.Events[_event] = [];\n            this.Events[_event].push( fn );\n          },\n          \n          off: function( _event, fn ){\n            if( fn && this.Events[_event] ){\n              const index = this.Events[_event].indexOf( fn );\n              if( index > -1 ){\n                this.Events[_event].splice( index, 1 );\n                if( this.Events[_event].length === 0 ) delete this.Events[_event];\n              }\n            }\n            else delete this.Events[_event];\n          },\n          \n          processMessageQueue: function(){\n            if( !this.connected || this.messageQueue.length === 0 ) return;\n            \n            const queue = [...this.messageQueue];\n            this.messageQueue = [];\n            \n            queue.forEach( msg => {\n              try { this.emit( msg._event, msg.payload, msg.fn ); }\n              catch( error ){ console.error('[EMBEDDED] Queue process error:', error); }\n            });\n          },\n          \n          handleMessage: function( data ){\n            if( !data || !data._event ) return;\n            \n            const { _event, payload, cid } = data;\n            \n            if( _event === '__heartbeat_response' ) return;\n            \n            if( _event === '__heartbeat' ){\n              this.emit('__heartbeat_response', { timestamp: Date.now() });\n              return;\n            }\n            \n            if( _event === 'ping' ){\n              this.emit('pong');\n              this.connected = true;\n              this.processMessageQueue();\n              return;\n            }\n            \n            this.fire( _event, payload, cid );\n          }\n        };\n        \n        // Listen to messages from React Native\n        window.addEventListener('message', function( event ){\n          try {\n            const message = JSON.parse( event.data );\n            window._iofRN.handleMessage( message );\n          }\n          catch( error ){ console.error('[EMBEDDED] Parse error:', error); }\n        });\n        \n        // Android support\n        if( typeof document !== 'undefined' ){\n          document.addEventListener('message', function( event ){\n            try {\n              const message = JSON.parse( event.data );\n              window._iofRN.handleMessage( message );\n            }\n            catch( error ){ console.error('[EMBEDDED] Parse error:', error); }\n          });\n        }\n        \n        true;\n      })();\n    ";
+    WIO.prototype.getInjectedJavaScript = function () {
+        return "\n      (function() {\n        const RESERVED_EVENTS = ['ping', 'pong', '__heartbeat', '__heartbeat_response'];\n        \n        window._wio = {\n          type: 'EMBEDDED',\n          connected: false,\n          Events: {},\n          messageQueue: [],\n          \n          ackId: function(){\n            const\n            rmin = 100000,\n            rmax = 999999,\n            timestamp = Date.now(),\n            random = Math.floor( Math.random() * ( rmax - rmin + 1 ) + rmin );\n\n            return timestamp + '_' + random;\n          },\n          \n          fire: function( _event, payload, cid ){\n            if( !this.Events[_event] && !this.Events[_event + '--@once'] ) return;\n            \n            const ackFn = cid\n              ? ( error, ...args ) => {\n                  this.emit( _event + '--' + cid + '--@ack', { error: error || false, args } );\n                }\n              : undefined;\n            \n            let listeners = [];\n            if( this.Events[_event + '--@once'] ){\n              _event += '--@once';\n              listeners = this.Events[_event];\n              delete this.Events[_event];\n            }\n            else listeners = this.Events[_event] || [];\n            \n            listeners.forEach( fn => {\n              try { payload !== undefined ? fn( payload, ackFn ) : fn( ackFn ); }\n              catch( error ){ console.error('[EMBEDDED] Listener error:', error); }\n            });\n          },\n          \n          emit: function( _event, payload, fn ){\n            if( typeof payload === 'function' ){\n              fn = payload;\n              payload = undefined;\n            }\n            \n            if( !this.connected && !RESERVED_EVENTS.includes(_event) ){\n              this.messageQueue.push({ _event, payload, fn, timestamp: Date.now() });\n              return;\n            }\n            \n            try {\n              let cid;\n              if( typeof fn === 'function' ){\n                cid = this.ackId();\n                this.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) );\n              }\n              \n              const messageData = {\n                _event,\n                payload,\n                cid,\n                timestamp: Date.now()\n              };\n              \n              window.ReactNativeWebView.postMessage( JSON.stringify( messageData ) );\n            }\n            catch( error ){\n              console.error('[EMBEDDED] Emit error:', error);\n              typeof fn === 'function' && fn( String(error) );\n            }\n          },\n          \n          on: function( _event, fn ){\n            if( !this.Events[_event] ) this.Events[_event] = [];\n            this.Events[_event].push( fn );\n          },\n          \n          once: function( _event, fn ){\n            _event += '--@once';\n            if( !this.Events[_event] ) this.Events[_event] = [];\n            this.Events[_event].push( fn );\n          },\n          \n          off: function( _event, fn ){\n            if( fn && this.Events[_event] ){\n              const index = this.Events[_event].indexOf( fn );\n              if( index > -1 ){\n                this.Events[_event].splice( index, 1 );\n                if( this.Events[_event].length === 0 ) delete this.Events[_event];\n              }\n            }\n            else delete this.Events[_event];\n          },\n          \n          processMessageQueue: function(){\n            if( !this.connected || this.messageQueue.length === 0 ) return;\n            \n            const queue = [...this.messageQueue];\n            this.messageQueue = [];\n            \n            queue.forEach( msg => {\n              try { this.emit( msg._event, msg.payload, msg.fn ); }\n              catch( error ){ console.error('[EMBEDDED] Queue process error:', error); }\n            });\n          },\n          \n          handleMessage: function( data ){\n            if( !data || !data._event ) return;\n            \n            const { _event, payload, cid } = data;\n            \n            if( _event === '__heartbeat_response' ) return;\n            \n            if( _event === '__heartbeat' ){\n              this.emit('__heartbeat_response', { timestamp: Date.now() });\n              return;\n            }\n            \n            if( _event === 'ping' ){\n              this.emit('pong');\n              this.connected = true;\n              this.processMessageQueue();\n              return;\n            }\n            \n            this.fire( _event, payload, cid );\n          }\n        };\n        \n        // Listen to messages from React Native\n        window.addEventListener('message', function( event ){\n          try {\n            const message = JSON.parse( event.data );\n            window._wio.handleMessage( message );\n          }\n          catch( error ){ console.error('[EMBEDDED] Parse error:', error); }\n        });\n        \n        // Android support\n        if( typeof document !== 'undefined' ){\n          document.addEventListener('message', function( event ){\n            try {\n              const message = JSON.parse( event.data );\n              window._wio.handleMessage( message );\n            }\n            catch( error ){ console.error('[EMBEDDED] Parse error:', error); }\n          });\n        }\n        \n        true;\n      })();\n    ";
     };
-    return IOF;
+    return WIO;
 }());
-exports.default = IOF;
+exports.default = WIO;

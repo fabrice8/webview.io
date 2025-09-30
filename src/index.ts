@@ -610,6 +610,7 @@ export default class WIO {
   getInjectedJavaScript(): string {
     return `
       (function() {
+        alert('[EMBEDDED] Injected JavaScript')
         const RESERVED_EVENTS = ['ping', 'pong', '__heartbeat', '__heartbeat_response'];
         
         window._wio = {
@@ -617,6 +618,32 @@ export default class WIO {
           connected: false,
           Events: {},
           messageQueue: [],
+
+          listen: function(){
+            console.log('[EMBEDDED] Listening for messages...')
+
+            // Listen to messages from React Native
+            window.addEventListener('message', function( event ){
+              try {
+                console.log('[EMBEDDED] Received message:', event.data);
+                const message = JSON.parse( event.data );
+                window._wio.handleMessage( message );
+              }
+              catch( error ){ console.error('[EMBEDDED] Parse error:', error); }
+            });
+            
+            // Android support
+            if( typeof document !== 'undefined' ){
+              document.addEventListener('message', function( event ){
+                try {
+                  console.log('[EMBEDDED] Received message:', event.data);
+                  const message = JSON.parse( event.data );
+                  window._wio.handleMessage( message );
+                }
+                catch( error ){ console.error('[EMBEDDED] Parse error:', error); }
+              });
+            }
+          },
           
           ackId: function(){
             const
@@ -740,27 +767,7 @@ export default class WIO {
             this.fire( _event, payload, cid );
           }
         };
-        
-        // Listen to messages from React Native
-        window.addEventListener('message', function( event ){
-          try {
-            const message = JSON.parse( event.data );
-            window._wio.handleMessage( message );
-          }
-          catch( error ){ console.error('[EMBEDDED] Parse error:', error); }
-        });
-        
-        // Android support
-        if( typeof document !== 'undefined' ){
-          document.addEventListener('message', function( event ){
-            try {
-              const message = JSON.parse( event.data );
-              window._wio.handleMessage( message );
-            }
-            catch( error ){ console.error('[EMBEDDED] Parse error:', error); }
-          });
-        }
-        
+
         true;
       })();
     `;
