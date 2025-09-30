@@ -85,7 +85,7 @@ const RESERVED_EVENTS = [
   '__heartbeat_response'
 ]
 
-export default class IOF {
+export default class WIO {
   Events: RegisteredEvents
   peer: Peer
   options: Options
@@ -612,7 +612,7 @@ export default class IOF {
       (function() {
         const RESERVED_EVENTS = ['ping', 'pong', '__heartbeat', '__heartbeat_response'];
         
-        window._iofRN = {
+        window._wio = {
           type: 'EMBEDDED',
           connected: false,
           Events: {},
@@ -745,7 +745,7 @@ export default class IOF {
         window.addEventListener('message', function( event ){
           try {
             const message = JSON.parse( event.data );
-            window._iofRN.handleMessage( message );
+            window._wio.handleMessage( message );
           }
           catch( error ){ console.error('[EMBEDDED] Parse error:', error); }
         });
@@ -755,7 +755,7 @@ export default class IOF {
           document.addEventListener('message', function( event ){
             try {
               const message = JSON.parse( event.data );
-              window._iofRN.handleMessage( message );
+              window._wio.handleMessage( message );
             }
             catch( error ){ console.error('[EMBEDDED] Parse error:', error); }
           });

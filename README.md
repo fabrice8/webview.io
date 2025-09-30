@@ -43,42 +43,42 @@ Make sure these are installed in your React Native project.
 import React, { useRef, useEffect } from 'react'
 import { View } from 'react-native'
 import { WebView } from 'react-native-webview'
-import IOF from 'webview.io'
+import WIO from 'webview.io'
 
 function MapComponent() {
   const webViewRef = useRef(null)
-  const iofRef = useRef(null)
+  const wioRef = useRef(null)
 
   useEffect(() => {
     // Initialize bridge
-    iofRef.current = new IOF({
+    wioRef.current = new WIO({
       type: 'WEBVIEW',
       debug: true
     })
 
     // Establish connection
-    iofRef.current.initiate(webViewRef, 'https://your-webview-content.com')
+    wioRef.current.initiate(webViewRef, 'https://your-webview-content.com')
 
     // Listen for connection
-    iofRef.current.on('connect', () => {
+    wioRef.current.on('connect', () => {
       console.log('Connected to WebView!')
 
       // Send a message
-      iofRef.current.emit('hello', { message: 'Hello from React Native!' })
+      wioRef.current.emit('hello', { message: 'Hello from React Native!' })
     })
 
     // Listen for messages
-    iofRef.current.on('response', (data) => {
+    wioRef.current.on('response', (data) => {
       console.log('Received:', data)
     })
 
     return () => {
-      iofRef.current?.disconnect()
+      wioRef.current?.disconnect()
     }
   }, [])
 
   const handleMessage = (event) => {
-    iofRef.current?.handleMessage(event)
+    wioRef.current?.handleMessage(event)
   }
 
   return (
@@ -87,7 +87,7 @@ function MapComponent() {
         ref={webViewRef}
         source={{ uri: 'https://your-webview-content.com' }}
         onMessage={handleMessage}
-        injectedJavaScript={iofRef.current?.getInjectedJavaScript()}
+        injectedJavaScript={wioRef.current?.getInjectedJavaScript()}
         javaScriptEnabled={true}
       />
     </View>
@@ -100,30 +100,30 @@ function MapComponent() {
 ```javascript
 // In your HTML/JS loaded in the WebView
 
-// The bridge is automatically available as window._iofRN
-const iofRN = window._iofRN
+// The bridge is automatically available as window._wio
+const wio = window._wio
 
 // Handle connection
-iofRN.on('connect', () => {
+wio.on('connect', () => {
   console.log('Connected to React Native!')
 })
 
 // Listen for messages
-iofRN.on('hello', (data) => {
+wio.on('hello', (data) => {
   console.log('Received:', data)
 
   // Send response
-  iofRN.emit('response', { received: true })
+  wio.emit('response', { received: true })
 })
 
 // Send messages to React Native
-iofRN.emit('ready')
+wio.emit('ready')
 ```
 
 ## Enhanced Configuration Options
 
 ```javascript
-const iof = new IOF({
+const wio = new WIO({
   type: 'WEBVIEW',                   // 'WEBVIEW' or 'EMBEDDED'
   debug: false,                      // Enable debug logging
   heartbeatInterval: 30000,          // Heartbeat interval in ms (30s)
@@ -142,14 +142,14 @@ const iof = new IOF({
 ```javascript
 // React Native side
 try {
-  const response = await iofRef.current.emitAsync('getData', { id: 123 }, 10000)
+  const response = await wioRef.current.emitAsync('getData', { id: 123 }, 10000)
   console.log('Response:', response)
 } catch (error) {
   console.error('Request failed:', error.message)
 }
 
 // WebView side - Listen and acknowledge
-window._iofRN.on('getData', async (data, ack) => {
+window._wio.on('getData', async (data, ack) => {
   try {
     const result = await fetchData(data.id)
     ack(false, result) // Success: ack(error, ...response)
@@ -164,14 +164,14 @@ window._iofRN.on('getData', async (data, ack) => {
 ```javascript
 // Wait for connection with timeout
 try {
-  await iofRef.current.connectAsync(5000) // 5 second timeout
+  await wioRef.current.connectAsync(5000) // 5 second timeout
   console.log('Connection established!')
 } catch (error) {
   console.error('Connection failed:', error.message)
 }
 
 // Wait for single event
-const userData = await iofRef.current.onceAsync('userProfile')
+const userData = await wioRef.current.onceAsync('userProfile')
 console.log('User data received:', userData)
 ```
 
@@ -181,15 +181,15 @@ console.log('User data received:', userData)
 
 ```javascript
 // Handle connection events
-iof.on('disconnect', (data) => {
+wio.on('disconnect', (data) => {
   console.log('Disconnected:', data.reason)
 })
 
-iof.on('reconnecting', (data) => {
+wio.on('reconnecting', (data) => {
   console.log(`Reconnection attempt ${data.attempt}, delay: ${data.delay}ms`)
 })
 
-iof.on('reconnection_failed', (data) => {
+wio.on('reconnection_failed', (data) => {
   console.error(`Failed to reconnect after ${data.attempts} attempts`)
 })
 ```
@@ -197,7 +197,7 @@ iof.on('reconnection_failed', (data) => {
 ### Connection Statistics
 
 ```javascript
-const stats = iof.getStats()
+const stats = wio.getStats()
 console.log(stats)
 // {
 //   connected: true,
@@ -217,10 +217,10 @@ console.log(stats)
 
 ```javascript
 // Strict origin checking (WebView side)
-window._iofRN.listen('react-native') // Only accept from React Native
+window._wio.listen('react-native') // Only accept from React Native
 
 // Error handling for invalid origins (React Native side)
-iof.on('error', (error) => {
+wio.on('error', (error) => {
   if (error.type === 'INVALID_ORIGIN') {
     console.log(`Rejected message from ${error.received}`)
   }
@@ -231,7 +231,7 @@ iof.on('error', (error) => {
 
 ```javascript
 // Automatic payload sanitization removes functions and undefined values
-iof.emit('data', {
+wio.emit('data', {
   text: 'Hello',
   func: () => {}, // Functions are automatically removed
   undef: undefined // Undefined values are automatically removed
@@ -241,11 +241,11 @@ iof.emit('data', {
 ### Rate Limiting
 
 ```javascript
-const iof = new IOF({
+const wio = new WIO({
   maxMessagesPerSecond: 10 // Limit to 10 messages per second
 })
 
-iof.on('error', (error) => {
+wio.on('error', (error) => {
   if (error.type === 'RATE_LIMIT_EXCEEDED') {
     console.log(`Rate limited: ${error.current}/${error.limit}`)
   }
@@ -255,7 +255,7 @@ iof.on('error', (error) => {
 ## Comprehensive Error Handling
 
 ```javascript
-iof.on('error', (error) => {
+wio.on('error', (error) => {
   switch (error.type) {
     case 'INVALID_ORIGIN':
       console.error(`Invalid origin: expected ${error.expected}, got ${error.received}`)
@@ -288,13 +288,13 @@ iof.on('error', (error) => {
 
 ```javascript
 // Messages are automatically queued when disconnected
-iof.emit('important-data', { data: 'This will be queued if disconnected' })
+wio.emit('important-data', { data: 'This will be queued if disconnected' })
 
 // Clear queue manually if needed
-iof.clearQueue()
+wio.clearQueue()
 
 // Check queue status
-const stats = iof.getStats()
+const stats = wio.getStats()
 console.log(`${stats.queuedMessages} messages queued`)
 ```
 
@@ -343,22 +343,22 @@ console.log(`${stats.queuedMessages} messages queued`)
 import React, { useRef, useEffect, useState } from 'react'
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native'
 import { WebView } from 'react-native-webview'
-import IOF from 'webview.io'
+import WIO from 'webview.io'
 
 function App() {
   const webViewRef = useRef(null)
-  const iofRef = useRef(null)
+  const wioRef = useRef(null)
   const [isConnected, setIsConnected] = useState(false)
 
   useEffect(() => {
-    iofRef.current = new IOF({ 
+    wioRef.current = new WIO({ 
       type: 'WEBVIEW',
       debug: true 
     })
 
-    iofRef.current.initiate(webViewRef, 'https://your-app.com')
+    wioRef.current.initiate(webViewRef, 'https://your-app.com')
 
-    iofRef.current
+    wioRef.current
       .on('connect', () => {
         console.log('Connected!')
         setIsConnected(true)
@@ -372,13 +372,13 @@ function App() {
       })
 
     return () => {
-      iofRef.current?.disconnect()
+      wioRef.current?.disconnect()
     }
   }, [])
 
   const getLocation = async () => {
     try {
-      const location = await iofRef.current.emitAsync('get:location')
+      const location = await wioRef.current.emitAsync('get:location')
       console.log('Got location:', location)
     } catch (error) {
       console.error('Failed to get location:', error)
@@ -390,8 +390,8 @@ function App() {
       <WebView
         ref={webViewRef}
         source={{ uri: 'https://your-app.com' }}
-        onMessage={(event) => iofRef.current?.handleMessage(event)}
-        injectedJavaScript={iofRef.current?.getInjectedJavaScript()}
+        onMessage={(event) => wioRef.current?.handleMessage(event)}
+        injectedJavaScript={wioRef.current?.getInjectedJavaScript()}
         javaScriptEnabled={true}
       />
       
@@ -416,7 +416,7 @@ const styles = StyleSheet.create({
 Full TypeScript support with comprehensive type definitions:
 
 ```typescript
-import IOF, { Options, Listener, AckFunction } from 'webview.io'
+import WIO, { Options, Listener, AckFunction } from 'webview.io'
 
 const options: Options = {
   type: 'WEBVIEW',
@@ -425,10 +425,10 @@ const options: Options = {
   maxMessageSize: 512 * 1024
 }
 
-const iof = new IOF(options)
+const wio = new WIO(options)
 
 // Typed event listeners
-iof.on('userAction', (data: { action: string; userId: number }) => {
+wio.on('userAction', (data: { action: string; userId: number }) => {
   console.log(`User ${data.userId} performed ${data.action}`)
 })
 
@@ -438,7 +438,7 @@ interface ApiResponse {
   data: any[]
 }
 
-const response = await iof.emitAsync<{ query: string }, ApiResponse>(
+const response = await wio.emitAsync<{ query: string }, ApiResponse>(
   'search',
   { query: 'hello' },
   5000
