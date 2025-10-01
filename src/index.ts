@@ -840,7 +840,7 @@ export default class WIO {
           ]
           
           // Use closure variable to avoid 'this' binding issues
-          const wio = {
+          window._wio = {
             type: 'EMBEDDED',
             connected: false,
             Events: {},
@@ -855,7 +855,7 @@ export default class WIO {
               window.addEventListener('message', function( event ){
                 try {
                   const message = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data
-                  wio.handleMessage( message )  // Use wio instead of this
+                  window._wio.handleMessage( message )  // Use window._wio instead of this
                 }
                 catch( error ){ console.error('[EMBEDDED] Parse error:', error ) }
               })
@@ -865,14 +865,16 @@ export default class WIO {
                 document.addEventListener('message', function( event ){
                   try {
                     const message = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data
-                    wio.handleMessage( message )  // Use wio instead of this
+                    window._wio.handleMessage( message )  // Use window._wio instead of this
                   }
                   catch( error ){ console.error('[EMBEDDED] Parse error:', error ) }
                 })
               }
 
-              wio.setupComplete = true  // Use wio instead of this
+              window._wio.setupComplete = true  // Use window._wio instead of this
               console.log('[EMBEDDED] Setup complete')
+
+              return window._wio
             },
             
             ackId: function(){
@@ -886,23 +888,23 @@ export default class WIO {
             },
             
             fire: function( _event, payload, cid ){
-              if( !wio.Events[_event] && !wio.Events[_event + '--@once'] ){
+              if( !window._wio.Events[_event] && !window._wio.Events[_event + '--@once'] ){
                 console.log('[EMBEDDED] No listener for:', _event)
                 return
               }
               
               const ackFn = cid
-                ? ( error, ...args ) => wio.emit( _event + '--' + cid + '--@ack', { error: error || false, args } )
+                ? ( error, ...args ) => window._wio.emit( _event + '--' + cid + '--@ack', { error: error || false, args } )
                 : undefined
               
               let listeners = []
-              if( wio.Events[_event + '--@once'] ){
+              if( window._wio.Events[_event + '--@once'] ){
                 _event += '--@once'
-                listeners = wio.Events[_event]
+                listeners = window._wio.Events[_event]
 
-                delete wio.Events[_event]
+                delete window._wio.Events[_event]
               }
-              else listeners = wio.Events[_event] || []
+              else listeners = window._wio.Events[_event] || []
               
               listeners.forEach( fn => {
                 try { payload !== undefined ? fn( payload, ackFn ) : fn( ackFn ) }
@@ -916,8 +918,8 @@ export default class WIO {
                 payload = undefined
               }
               
-              if( !wio.connected && !RESERVED_EVENTS.includes(_event) ){
-                wio.messageQueue.push({ _event, payload, fn, timestamp: Date.now() })
+              if( !window._wio.connected && !RESERVED_EVENTS.includes(_event) ){
+                window._wio.messageQueue.push({ _event, payload, fn, timestamp: Date.now() })
                 console.log('[EMBEDDED] Queued message:', _event)
                 return
               }
@@ -925,8 +927,8 @@ export default class WIO {
               try {
                 let cid
                 if( typeof fn === 'function' ){
-                  cid = wio.ackId()
-                  wio.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) )
+                  cid = window._wio.ackId()
+                  window._wio.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) )
                 }
                 
                 const messageData = {
@@ -934,7 +936,7 @@ export default class WIO {
                   payload,
                   cid,
                   timestamp: Date.now(),
-                  token: RESERVED_EVENTS.includes(_event) ? wio.connectionToken : undefined
+                  token: RESERVED_EVENTS.includes(_event) ? window._wio.connectionToken : undefined
                 }
                 
                 if( typeof window.ReactNativeWebView !== 'undefined' )
@@ -948,37 +950,43 @@ export default class WIO {
             },
             
             on: function( _event, fn ){
-              if( !wio.Events[_event] ) wio.Events[_event] = []
-              wio.Events[_event].push( fn )
+              if( !window._wio.Events[_event] ) window._wio.Events[_event] = []
+              window._wio.Events[_event].push( fn )
+
+              return window._wio
             },
             
             once: function( _event, fn ){
               _event += '--@once'
-              if( !wio.Events[_event] ) wio.Events[_event] = []
+              if( !window._wio.Events[_event] ) window._wio.Events[_event] = []
 
-              wio.Events[_event].push( fn )
+              window._wio.Events[_event].push( fn )
+
+              return window._wio
             },
             
             off: function( _event, fn ){
-              if( fn && wio.Events[_event] ){
-                const index = wio.Events[_event].indexOf( fn )
+              if( fn && window._wio.Events[_event] ){
+                const index = window._wio.Events[_event].indexOf( fn )
                 if( index > -1 ){
-                  wio.Events[_event].splice( index, 1 )
-                  if( wio.Events[_event].length === 0 ) delete wio.Events[_event]
+                  window._wio.Events[_event].splice( index, 1 )
+                  if( window._wio.Events[_event].length === 0 ) delete window._wio.Events[_event]
                 }
               }
-              else delete wio.Events[_event]
+              else delete window._wio.Events[_event]
+
+              return window._wio
             },
             
             processMessageQueue: function(){
-              if( !wio.connected || wio.messageQueue.length === 0 ) return
+              if( !window._wio.connected || window._wio.messageQueue.length === 0 ) return
               
-              console.log('[EMBEDDED] Processing', wio.messageQueue.length, 'queued messages')
-              const queue = [ ...wio.messageQueue ]
-              wio.messageQueue = []
+              console.log('[EMBEDDED] Processing', window._wio.messageQueue.length, 'queued messages')
+              const queue = [ ...window._wio.messageQueue ]
+              window._wio.messageQueue = []
               
               queue.forEach( msg => {
-                try { wio.emit( msg._event, msg.payload, msg.fn ) }
+                try { window._wio.emit( msg._event, msg.payload, msg.fn ) }
                 catch( error ){ console.error('[EMBEDDED] Queue process error:', error ) }
               })
             },
@@ -996,7 +1004,7 @@ export default class WIO {
               
               // Handle heartbeat request
               if( _event === '__heartbeat' ){
-                wio.emit('__heartbeat_response', { timestamp: Date.now() })
+                window._wio.emit('__heartbeat_response', { timestamp: Date.now() })
                 return
               }
               
@@ -1009,30 +1017,30 @@ export default class WIO {
               // Handle ping from WEBVIEW
               if( _event === 'ping' ){
                 console.log('[EMBEDDED] Received ping, sending pong')
-                wio.connectionToken = token
+                window._wio.connectionToken = token
 
-                wio.emit('pong', { token: wio.connectionToken })
+                window._wio.emit('pong', { token: window._wio.connectionToken })
                 return
               }
               
               // Handle connection acknowledgment
               if( _event === '__connection_ack' ){
-                if( token && token !== wio.connectionToken ){
+                if( token && token !== window._wio.connectionToken ){
                   console.error('[EMBEDDED] Invalid connection token in ack')
                   return
                 }
                 
                 console.log('[EMBEDDED] Connection established (received ack)')
 
-                wio.connected = true
-                wio.processMessageQueue()
-                wio.fire('connect')
+                window._wio.connected = true
+                window._wio.processMessageQueue()
+                window._wio.fire('connect')
 
                 return
               }
               
               // Fire event listeners
-              wio.fire( _event, payload, cid )
+              window._wio.fire( _event, payload, cid )
             },
             
             announceReady: function(){
@@ -1043,7 +1051,7 @@ export default class WIO {
               console.log('[EMBEDDED] Starting ready announcements')
               
               const announce = () => {
-                if( wio.connected ){
+                if( window._wio.connected ){
                   console.log('[EMBEDDED] Connected, stopping announcements')
                   return
                 }
@@ -1055,7 +1063,7 @@ export default class WIO {
                 }
                 
                 console.log('[EMBEDDED] Announcing ready (attempt', attempts + '/' + maxAttempts + ')')
-                wio.emit('__embedded_ready')
+                window._wio.emit('__embedded_ready')
                 
                 setTimeout( announce, interval )
               }
@@ -1063,9 +1071,6 @@ export default class WIO {
               announce()
             }
           }
-
-          // Expose to global scope
-          window._wio = wio
 
           // Initialize
           wio.listen()
