@@ -12,6 +12,8 @@ export type Options = {
     maxMessagesPerSecond?: number;
     autoReconnect?: boolean;
     messageQueueSize?: number;
+    connectionPingInterval?: number;
+    maxConnectionAttempts?: number;
 };
 export interface RegisteredEvents {
     [index: string]: Listener[];
@@ -22,6 +24,7 @@ export type Peer = {
     origin?: string;
     connected?: boolean;
     lastHeartbeat?: number;
+    embeddedReady?: boolean;
 };
 export type MessageData = {
     _event: string;
@@ -29,6 +32,7 @@ export type MessageData = {
     cid: string | undefined;
     timestamp?: number;
     size?: number;
+    token?: string;
 };
 export type Message = {
     data: MessageData;
@@ -45,10 +49,15 @@ export default class WIO {
     options: Options;
     private heartbeatTimer?;
     private reconnectTimer?;
+    private connectionAttemptTimer?;
+    private connectionPingInterval?;
+    private embeddedReadyCheckInterval?;
     private messageQueue;
     private messageRateTracker;
     private reconnectAttempts;
     private maxReconnectAttempts;
+    private connectionToken?;
+    private connectionAttempts;
     constructor(options?: Options);
     debug(...args: any[]): void;
     isConnected(): boolean;
@@ -56,6 +65,10 @@ export default class WIO {
     private stopHeartbeat;
     private handleConnectionLoss;
     private attemptReconnection;
+    private startConnectionAttempt;
+    private stopConnectionAttempt;
+    private announceEmbeddedReady;
+    private stopEmbeddedReadyAnnouncement;
     private checkRateLimit;
     private queueMessage;
     private processMessageQueue;
@@ -65,12 +78,10 @@ export default class WIO {
     initiate(webViewRef: RefObject<WebView>, origin: string): this;
     /**
      * Listening to connection from the WebView host
-     * Note: In React Native context, this is handled by injected JavaScript
      */
     listen(hostOrigin?: string): this;
     /**
      * Handle incoming message from WebView
-     * Called by React Native component via onMessage prop
      */
     handleMessage(event: {
         nativeEvent: {
@@ -90,11 +101,13 @@ export default class WIO {
     disconnect(fn?: () => void): this;
     getStats(): {
         connected: boolean;
+        embeddedReady: boolean | undefined;
         peerType: PeerType;
         origin: string | undefined;
         lastHeartbeat: number | undefined;
         queuedMessages: number;
         reconnectAttempts: number;
+        connectionAttempts: number;
         activeListeners: number;
         messageRate: number;
     };

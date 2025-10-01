@@ -44,11 +44,17 @@ var ackId = function () {
     var rmin = 100000, rmax = 999999, timestamp = Date.now(), random = Math.floor(Math.random() * (rmax - rmin + 1) + rmin);
     return "".concat(timestamp, "_").concat(random);
 };
+var generateToken = function () {
+    return "".concat(Date.now(), "_").concat(Math.random().toString(36).substring(2, 15));
+};
 var RESERVED_EVENTS = [
     'ping',
     'pong',
     '__heartbeat',
-    '__heartbeat_response'
+    '__heartbeat_response',
+    '__embedded_ready',
+    '__connection_ack',
+    '__webview_ready'
 ];
 var WIO = /** @class */ (function () {
     function WIO(options) {
@@ -57,11 +63,12 @@ var WIO = /** @class */ (function () {
         this.messageRateTracker = [];
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
+        this.connectionAttempts = 0;
         if (options && typeof options !== 'object')
             throw new Error('Invalid Options');
-        this.options = __assign({ debug: false, heartbeatInterval: 30000, connectionTimeout: 10000, maxMessageSize: 1024 * 1024, maxMessagesPerSecond: 100, autoReconnect: true, messageQueueSize: 50 }, options);
+        this.options = __assign({ debug: false, heartbeatInterval: 30000, connectionTimeout: 10000, maxMessageSize: 1024 * 1024, maxMessagesPerSecond: 100, autoReconnect: true, messageQueueSize: 50, connectionPingInterval: 2000, maxConnectionAttempts: 5 }, options);
         this.Events = {};
-        this.peer = { type: 'WEBVIEW', connected: false };
+        this.peer = { type: 'WEBVIEW', connected: false, embeddedReady: false };
         if (options.type)
             this.peer.type = options.type;
     }
@@ -112,7 +119,9 @@ var WIO = /** @class */ (function () {
         if (!this.peer.connected)
             return;
         this.peer.connected = false;
+        this.peer.embeddedReady = false;
         this.stopHeartbeat();
+        this.stopConnectionAttempt();
         this.fire('disconnect', { reason: 'CONNECTION_LOST' });
         this.options.autoReconnect
             && this.reconnectAttempts < this.maxReconnectAttempts
@@ -128,10 +137,19 @@ var WIO = /** @class */ (function () {
         this.fire('reconnecting', { attempt: this.reconnectAttempts, delay: delay });
         this.reconnectTimer = setTimeout(function () {
             _this.reconnectTimer = undefined;
+            // Reset connection state
+            _this.peer.connected = false;
+            _this.peer.embeddedReady = false;
+            _this.connectionAttempts = 0;
+            _this.connectionToken = generateToken();
             // Re-initiate connection for WEBVIEW type
-            _this.peer.type === 'WEBVIEW'
-                && _this.emit('ping');
-            // For EMBEDDED type, just wait for incoming connection
+            if (_this.peer.type === 'WEBVIEW') {
+                _this.startConnectionAttempt();
+            }
+            // For EMBEDDED type, announce readiness
+            if (_this.peer.type === 'EMBEDDED') {
+                _this.announceEmbeddedReady();
+            }
             // Set timeout for this reconnection attempt
             setTimeout(function () {
                 if (_this.peer.connected)
@@ -141,6 +159,82 @@ var WIO = /** @class */ (function () {
                     : _this.fire('reconnection_failed', { attempts: _this.reconnectAttempts });
             }, _this.options.connectionTimeout);
         }, delay);
+    };
+    // Start connection attempt with timeout and retries
+    WIO.prototype.startConnectionAttempt = function () {
+        var _this = this;
+        this.stopConnectionAttempt();
+        this.debug("[".concat(this.peer.type, "] Starting connection attempt"));
+        // Send initial ping
+        this.emit('ping', { token: this.connectionToken });
+        // Set up periodic ping until connected
+        this.connectionPingInterval = setInterval(function () {
+            if (!_this.peer.connected) {
+                _this.connectionAttempts++;
+                if (_this.connectionAttempts >= _this.options.maxConnectionAttempts) {
+                    _this.debug("[".concat(_this.peer.type, "] Max connection attempts reached"));
+                    _this.stopConnectionAttempt();
+                    _this.fire('connect_timeout', { attempts: _this.connectionAttempts });
+                    _this.options.autoReconnect && _this.attemptReconnection();
+                    return;
+                }
+                _this.debug("[".concat(_this.peer.type, "] Connection attempt ").concat(_this.connectionAttempts, "/").concat(_this.options.maxConnectionAttempts));
+                _this.emit('ping', { token: _this.connectionToken });
+            }
+            else {
+                _this.stopConnectionAttempt();
+            }
+        }, this.options.connectionPingInterval);
+        // Set overall timeout
+        this.connectionAttemptTimer = setTimeout(function () {
+            if (!_this.peer.connected) {
+                _this.debug("[".concat(_this.peer.type, "] Connection timeout after ").concat(_this.options.connectionTimeout, "ms"));
+                _this.stopConnectionAttempt();
+                _this.fire('connect_timeout', { attempts: _this.connectionAttempts });
+                _this.options.autoReconnect && _this.attemptReconnection();
+            }
+        }, this.options.connectionTimeout);
+    };
+    WIO.prototype.stopConnectionAttempt = function () {
+        if (this.connectionPingInterval) {
+            clearInterval(this.connectionPingInterval);
+            this.connectionPingInterval = undefined;
+        }
+        if (this.connectionAttemptTimer) {
+            clearTimeout(this.connectionAttemptTimer);
+            this.connectionAttemptTimer = undefined;
+        }
+    };
+    // For EMBEDDED side to announce readiness
+    WIO.prototype.announceEmbeddedReady = function () {
+        var _this = this;
+        this.stopEmbeddedReadyAnnouncement();
+        var attempts = 0;
+        var maxAttempts = this.options.maxConnectionAttempts || 5;
+        this.debug("[".concat(this.peer.type, "] Announcing embedded ready"));
+        this.emit('__embedded_ready');
+        this.embeddedReadyCheckInterval = setInterval(function () {
+            if (!_this.peer.connected) {
+                attempts++;
+                if (attempts >= maxAttempts) {
+                    _this.debug("[".concat(_this.peer.type, "] Max ready announcement attempts reached"));
+                    _this.stopEmbeddedReadyAnnouncement();
+                    _this.fire('connect_timeout', { attempts: attempts });
+                    return;
+                }
+                _this.debug("[".concat(_this.peer.type, "] Ready announcement attempt ").concat(attempts, "/").concat(maxAttempts));
+                _this.emit('__embedded_ready');
+            }
+            else {
+                _this.stopEmbeddedReadyAnnouncement();
+            }
+        }, this.options.connectionPingInterval);
+    };
+    WIO.prototype.stopEmbeddedReadyAnnouncement = function () {
+        if (this.embeddedReadyCheckInterval) {
+            clearInterval(this.embeddedReadyCheckInterval);
+            this.embeddedReadyCheckInterval = undefined;
+        }
     };
     // Message rate limiting
     WIO.prototype.checkRateLimit = function () {
@@ -206,25 +300,33 @@ var WIO = /** @class */ (function () {
         this.peer.webViewRef = webViewRef;
         this.peer.origin = origin;
         this.peer.connected = false;
+        this.peer.embeddedReady = false;
         this.reconnectAttempts = 0;
+        this.connectionAttempts = 0;
+        this.connectionToken = generateToken();
         this.debug("[".concat(this.peer.type, "] Initiate connection: WebView origin <").concat(origin, ">"));
-        this.emit('ping');
+        // Start connection attempt with timeout and retries
+        this.startConnectionAttempt();
         return this;
     };
     /**
      * Listening to connection from the WebView host
-     * Note: In React Native context, this is handled by injected JavaScript
      */
     WIO.prototype.listen = function (hostOrigin) {
-        this.peer.type = 'EMBEDDED'; // iframe.io-rn connection listener is automatically set as EMBEDDED
+        var _this = this;
+        this.peer.type = 'EMBEDDED';
         this.peer.connected = false;
+        this.peer.embeddedReady = false;
         this.reconnectAttempts = 0;
         this.debug("[".concat(this.peer.type, "] Listening to connect").concat(hostOrigin ? ": Host <".concat(hostOrigin, ">") : ''));
+        // Start announcing readiness
+        setTimeout(function () {
+            _this.announceEmbeddedReady();
+        }, 100);
         return this;
     };
     /**
      * Handle incoming message from WebView
-     * Called by React Native component via onMessage prop
      */
     WIO.prototype.handleMessage = function (event) {
         try {
@@ -232,7 +334,15 @@ var WIO = /** @class */ (function () {
             // Enhanced security: check valid message structure
             if (typeof data !== 'object' || !data.hasOwnProperty('_event'))
                 return;
-            var _a = data, _event = _a._event, payload = _a.payload, cid = _a.cid, timestamp = _a.timestamp;
+            var _a = data, _event = _a._event, payload = _a.payload, cid = _a.cid, timestamp = _a.timestamp, token = _a.token;
+            // Validate origin if specified
+            if (this.peer.origin && event.nativeEvent && 'origin' in event.nativeEvent) {
+                var messageOrigin = event.nativeEvent.origin;
+                if (messageOrigin && messageOrigin !== this.peer.origin) {
+                    this.debug("[".concat(this.peer.type, "] Message from unauthorized origin: ").concat(messageOrigin));
+                    return;
+                }
+            }
             // Handle heartbeat responses
             if (_event === '__heartbeat_response') {
                 this.peer.lastHeartbeat = Date.now();
@@ -244,17 +354,74 @@ var WIO = /** @class */ (function () {
                 this.peer.lastHeartbeat = Date.now();
                 return;
             }
+            // Handle embedded ready announcement
+            if (_event === '__embedded_ready') {
+                this.peer.embeddedReady = true;
+                this.debug("[".concat(this.peer.type, "] Embedded peer ready"));
+                // If we're WEBVIEW and not connected, send ping
+                if (this.peer.type === 'WEBVIEW' && !this.peer.connected) {
+                    this.emit('ping', { token: this.connectionToken });
+                }
+                return;
+            }
+            // Handle webview ready signal
+            if (_event === '__webview_ready') {
+                this.debug("[".concat(this.peer.type, "] WebView peer ready"));
+                return;
+            }
             this.debug("[".concat(this.peer.type, "] Message: ").concat(_event), payload || '');
-            // Handshake or availability check events
-            if (_event == 'pong') {
-                // WebView is connected
-                this.peer.connected = true;
-                this.reconnectAttempts = 0;
-                this.peer.lastHeartbeat = Date.now();
-                this.startHeartbeat();
-                this.fire('connect');
-                this.processMessageQueue();
-                this.debug("[".concat(this.peer.type, "] connected"));
+            // Handshake: ping event
+            if (_event === 'ping') {
+                // EMBEDDED receives ping from WEBVIEW
+                if (this.peer.type === 'EMBEDDED') {
+                    this.connectionToken = token;
+                    this.emit('pong', { token: this.connectionToken });
+                    // Don't set fully connected yet - wait for ack
+                    this.debug("[".concat(this.peer.type, "] Received ping, sent pong"));
+                }
+                return;
+            }
+            // Handshake: pong event
+            if (_event === 'pong') {
+                // WEBVIEW receives pong from EMBEDDED
+                if (this.peer.type === 'WEBVIEW') {
+                    // Validate token if provided
+                    if (token && token !== this.connectionToken) {
+                        this.debug("[".concat(this.peer.type, "] Invalid connection token in pong"));
+                        return;
+                    }
+                    this.peer.connected = true;
+                    this.reconnectAttempts = 0;
+                    this.connectionAttempts = 0;
+                    this.peer.lastHeartbeat = Date.now();
+                    // Send connection acknowledgment to complete 3-way handshake
+                    this.emit('__connection_ack', { token: this.connectionToken });
+                    this.stopConnectionAttempt();
+                    this.startHeartbeat();
+                    this.fire('connect');
+                    this.processMessageQueue();
+                    this.debug("[".concat(this.peer.type, "] Connected (3-way handshake complete)"));
+                }
+                return;
+            }
+            // Handshake: connection ack
+            if (_event === '__connection_ack') {
+                // EMBEDDED receives ack from WEBVIEW
+                if (this.peer.type === 'EMBEDDED') {
+                    // Validate token if provided
+                    if (token && token !== this.connectionToken) {
+                        this.debug("[".concat(this.peer.type, "] Invalid connection token in ack"));
+                        return;
+                    }
+                    this.peer.connected = true;
+                    this.reconnectAttempts = 0;
+                    this.peer.lastHeartbeat = Date.now();
+                    this.stopEmbeddedReadyAnnouncement();
+                    this.startHeartbeat();
+                    this.fire('connect');
+                    this.processMessageQueue();
+                    this.debug("[".concat(this.peer.type, "] Connected (received ack)"));
+                }
                 return;
             }
             // Fire available event listeners
@@ -351,7 +518,8 @@ var WIO = /** @class */ (function () {
                 payload: sanitizedPayload,
                 cid: cid,
                 timestamp: Date.now(),
-                size: getMessageSize(sanitizedPayload)
+                size: getMessageSize(sanitizedPayload),
+                token: RESERVED_EVENTS.includes(_event) ? this.connectionToken : undefined
             };
             (_a = this.peer.webViewRef.current) === null || _a === void 0 ? void 0 : _a.postMessage(JSON.stringify(newObject(messageData)));
         }
@@ -459,6 +627,8 @@ var WIO = /** @class */ (function () {
     // Clean up all resources
     WIO.prototype.cleanup = function () {
         this.stopHeartbeat();
+        this.stopConnectionAttempt();
+        this.stopEmbeddedReadyAnnouncement();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = undefined;
@@ -468,12 +638,15 @@ var WIO = /** @class */ (function () {
         // Cleanup on disconnect
         this.cleanup();
         this.peer.connected = false;
+        this.peer.embeddedReady = false;
         this.peer.webViewRef = undefined;
         this.peer.origin = undefined;
         this.peer.lastHeartbeat = undefined;
         this.messageQueue = [];
         this.messageRateTracker = [];
         this.reconnectAttempts = 0;
+        this.connectionAttempts = 0;
+        this.connectionToken = undefined;
         this.removeListeners();
         typeof fn == 'function' && fn();
         this.debug("[".concat(this.peer.type, "] Disconnected"));
@@ -483,11 +656,13 @@ var WIO = /** @class */ (function () {
     WIO.prototype.getStats = function () {
         return {
             connected: this.isConnected(),
+            embeddedReady: this.peer.embeddedReady,
             peerType: this.peer.type,
             origin: this.peer.origin,
             lastHeartbeat: this.peer.lastHeartbeat,
             queuedMessages: this.messageQueue.length,
             reconnectAttempts: this.reconnectAttempts,
+            connectionAttempts: this.connectionAttempts,
             activeListeners: Object.keys(this.Events).length,
             messageRate: this.messageRateTracker.length
         };
@@ -504,7 +679,7 @@ var WIO = /** @class */ (function () {
      * Sets up the EMBEDDED side of the bridge
      */
     WIO.prototype.getInjectedJavaScript = function () {
-        return "\n      (function() {\n        alert('[EMBEDDED] Injected JavaScript')\n        const RESERVED_EVENTS = ['ping', 'pong', '__heartbeat', '__heartbeat_response'];\n        \n        window._wio = {\n          type: 'EMBEDDED',\n          connected: false,\n          Events: {},\n          messageQueue: [],\n\n          listen: function(){\n            console.log('[EMBEDDED] Listening for messages...')\n\n            // Listen to messages from React Native\n            window.addEventListener('message', function( event ){\n              try {\n                console.log('[EMBEDDED] Received message:', event.data);\n                const message = JSON.parse( event.data );\n                window._wio.handleMessage( message );\n              }\n              catch( error ){ console.error('[EMBEDDED] Parse error:', error); }\n            });\n            \n            // Android support\n            if( typeof document !== 'undefined' ){\n              document.addEventListener('message', function( event ){\n                try {\n                  console.log('[EMBEDDED] Received message:', event.data);\n                  const message = JSON.parse( event.data );\n                  window._wio.handleMessage( message );\n                }\n                catch( error ){ console.error('[EMBEDDED] Parse error:', error); }\n              });\n            }\n          },\n          \n          ackId: function(){\n            const\n            rmin = 100000,\n            rmax = 999999,\n            timestamp = Date.now(),\n            random = Math.floor( Math.random() * ( rmax - rmin + 1 ) + rmin );\n\n            return timestamp + '_' + random;\n          },\n          \n          fire: function( _event, payload, cid ){\n            if( !this.Events[_event] && !this.Events[_event + '--@once'] ) return;\n            \n            const ackFn = cid\n              ? ( error, ...args ) => {\n                  this.emit( _event + '--' + cid + '--@ack', { error: error || false, args } );\n                }\n              : undefined;\n            \n            let listeners = [];\n            if( this.Events[_event + '--@once'] ){\n              _event += '--@once';\n              listeners = this.Events[_event];\n              delete this.Events[_event];\n            }\n            else listeners = this.Events[_event] || [];\n            \n            listeners.forEach( fn => {\n              try { payload !== undefined ? fn( payload, ackFn ) : fn( ackFn ); }\n              catch( error ){ console.error('[EMBEDDED] Listener error:', error); }\n            });\n          },\n          \n          emit: function( _event, payload, fn ){\n            if( typeof payload === 'function' ){\n              fn = payload;\n              payload = undefined;\n            }\n            \n            if( !this.connected && !RESERVED_EVENTS.includes(_event) ){\n              this.messageQueue.push({ _event, payload, fn, timestamp: Date.now() });\n              return;\n            }\n            \n            try {\n              let cid;\n              if( typeof fn === 'function' ){\n                cid = this.ackId();\n                this.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) );\n              }\n              \n              const messageData = {\n                _event,\n                payload,\n                cid,\n                timestamp: Date.now()\n              };\n              \n              window.ReactNativeWebView.postMessage( JSON.stringify( messageData ) );\n            }\n            catch( error ){\n              console.error('[EMBEDDED] Emit error:', error);\n              typeof fn === 'function' && fn( String(error) );\n            }\n          },\n          \n          on: function( _event, fn ){\n            if( !this.Events[_event] ) this.Events[_event] = [];\n            this.Events[_event].push( fn );\n          },\n          \n          once: function( _event, fn ){\n            _event += '--@once';\n            if( !this.Events[_event] ) this.Events[_event] = [];\n            this.Events[_event].push( fn );\n          },\n          \n          off: function( _event, fn ){\n            if( fn && this.Events[_event] ){\n              const index = this.Events[_event].indexOf( fn );\n              if( index > -1 ){\n                this.Events[_event].splice( index, 1 );\n                if( this.Events[_event].length === 0 ) delete this.Events[_event];\n              }\n            }\n            else delete this.Events[_event];\n          },\n          \n          processMessageQueue: function(){\n            if( !this.connected || this.messageQueue.length === 0 ) return;\n            \n            const queue = [...this.messageQueue];\n            this.messageQueue = [];\n            \n            queue.forEach( msg => {\n              try { this.emit( msg._event, msg.payload, msg.fn ); }\n              catch( error ){ console.error('[EMBEDDED] Queue process error:', error); }\n            });\n          },\n          \n          handleMessage: function( data ){\n            if( !data || !data._event ) return;\n            \n            const { _event, payload, cid } = data;\n            \n            if( _event === '__heartbeat_response' ) return;\n            \n            if( _event === '__heartbeat' ){\n              this.emit('__heartbeat_response', { timestamp: Date.now() });\n              return;\n            }\n            \n            if( _event === 'ping' ){\n              this.emit('pong');\n              this.connected = true;\n              this.processMessageQueue();\n              return;\n            }\n            \n            this.fire( _event, payload, cid );\n          }\n        };\n\n        true;\n      })();\n    ";
+        return "\n      (function() {\n        try {\n          console.log('[EMBEDDED] Initializing WIO bridge...');\n          \n          const RESERVED_EVENTS = ['ping', 'pong', '__heartbeat', '__heartbeat_response', '__embedded_ready', '__connection_ack', '__webview_ready'];\n          \n          window._wio = {\n            type: 'EMBEDDED',\n            connected: false,\n            Events: {},\n            messageQueue: [],\n            connectionToken: null,\n            setupComplete: false,\n\n            listen: function(){\n              console.log('[EMBEDDED] Setting up message listeners...');\n\n              // Listen to messages from React Native\n              window.addEventListener('message', function( event ){\n                try {\n                  const message = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data;\n                  window._wio.handleMessage( message );\n                }\n                catch( error ){ \n                  console.error('[EMBEDDED] Parse error:', error); \n                }\n              });\n              \n              // Android support\n              if( typeof document !== 'undefined' ){\n                document.addEventListener('message', function( event ){\n                  try {\n                    const message = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data;\n                    window._wio.handleMessage( message );\n                  }\n                  catch( error ){ \n                    console.error('[EMBEDDED] Parse error:', error); \n                  }\n                });\n              }\n\n              this.setupComplete = true;\n              console.log('[EMBEDDED] Setup complete');\n            },\n            \n            ackId: function(){\n              const\n              rmin = 100000,\n              rmax = 999999,\n              timestamp = Date.now(),\n              random = Math.floor( Math.random() * ( rmax - rmin + 1 ) + rmin );\n\n              return timestamp + '_' + random;\n            },\n            \n            fire: function( _event, payload, cid ){\n              if( !this.Events[_event] && !this.Events[_event + '--@once'] ){\n                console.log('[EMBEDDED] No listener for:', _event);\n                return;\n              }\n              \n              const ackFn = cid\n                ? ( error, ...args ) => {\n                    this.emit( _event + '--' + cid + '--@ack', { error: error || false, args } );\n                  }\n                : undefined;\n              \n              let listeners = [];\n              if( this.Events[_event + '--@once'] ){\n                _event += '--@once';\n                listeners = this.Events[_event];\n                delete this.Events[_event];\n              }\n              else listeners = this.Events[_event] || [];\n              \n              listeners.forEach( fn => {\n                try { \n                  payload !== undefined ? fn( payload, ackFn ) : fn( ackFn ); \n                }\n                catch( error ){ \n                  console.error('[EMBEDDED] Listener error:', error); \n                }\n              });\n            },\n            \n            emit: function( _event, payload, fn ){\n              if( typeof payload === 'function' ){\n                fn = payload;\n                payload = undefined;\n              }\n              \n              if( !this.connected && !RESERVED_EVENTS.includes(_event) ){\n                this.messageQueue.push({ _event, payload, fn, timestamp: Date.now() });\n                console.log('[EMBEDDED] Queued message:', _event);\n                return;\n              }\n              \n              try {\n                let cid;\n                if( typeof fn === 'function' ){\n                  cid = this.ackId();\n                  this.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) );\n                }\n                \n                const messageData = {\n                  _event,\n                  payload,\n                  cid,\n                  timestamp: Date.now(),\n                  token: RESERVED_EVENTS.includes(_event) ? this.connectionToken : undefined\n                };\n                \n                if( typeof window.ReactNativeWebView !== 'undefined' ){\n                  window.ReactNativeWebView.postMessage( JSON.stringify( messageData ) );\n                }\n                else {\n                  console.error('[EMBEDDED] ReactNativeWebView not available');\n                }\n              }\n              catch( error ){\n                console.error('[EMBEDDED] Emit error:', error);\n                typeof fn === 'function' && fn( String(error) );\n              }\n            },\n            \n            on: function( _event, fn ){\n              if( !this.Events[_event] ) this.Events[_event] = [];\n              this.Events[_event].push( fn );\n            },\n            \n            once: function( _event, fn ){\n              _event += '--@once';\n              if( !this.Events[_event] ) this.Events[_event] = [];\n              this.Events[_event].push( fn );\n            },\n            \n            off: function( _event, fn ){\n              if( fn && this.Events[_event] ){\n                const index = this.Events[_event].indexOf( fn );\n                if( index > -1 ){\n                  this.Events[_event].splice( index, 1 );\n                  if( this.Events[_event].length === 0 ) delete this.Events[_event];\n                }\n              }\n              else delete this.Events[_event];\n            },\n            \n            processMessageQueue: function(){\n              if( !this.connected || this.messageQueue.length === 0 ) return;\n              \n              console.log('[EMBEDDED] Processing', this.messageQueue.length, 'queued messages');\n              const queue = [...this.messageQueue];\n              this.messageQueue = [];\n              \n              queue.forEach( msg => {\n                try { \n                  this.emit( msg._event, msg.payload, msg.fn ); \n                }\n                catch( error ){ \n                  console.error('[EMBEDDED] Queue process error:', error); \n                }\n              });\n            },\n            \n            handleMessage: function( data ){\n              if( !data || !data._event ) return;\n              \n              const { _event, payload, cid, token } = data;\n              \n              console.log('[EMBEDDED] Received:', _event);\n              \n              // Handle heartbeat response\n              if( _event === '__heartbeat_response' ){\n                return;\n              }\n              \n              // Handle heartbeat request\n              if( _event === '__heartbeat' ){\n                this.emit('__heartbeat_response', { timestamp: Date.now() });\n                return;\n              }\n              \n              // Handle webview ready signal\n              if( _event === '__webview_ready' ){\n                console.log('[EMBEDDED] WebView ready signal received');\n                return;\n              }\n              \n              // Handle ping from WEBVIEW\n              if( _event === 'ping' ){\n                console.log('[EMBEDDED] Received ping, sending pong');\n                this.connectionToken = token;\n                this.emit('pong', { token: this.connectionToken });\n                return;\n              }\n              \n              // Handle connection acknowledgment\n              if( _event === '__connection_ack' ){\n                if( token && token !== this.connectionToken ){\n                  console.error('[EMBEDDED] Invalid connection token in ack');\n                  return;\n                }\n                \n                console.log('[EMBEDDED] Connection established (received ack)');\n                this.connected = true;\n                this.processMessageQueue();\n                this.fire('connect');\n                return;\n              }\n              \n              // Fire event listeners\n              this.fire( _event, payload, cid );\n            },\n            \n            announceReady: function(){\n              let attempts = 0;\n              const maxAttempts = 5;\n              const interval = 2000;\n              \n              console.log('[EMBEDDED] Starting ready announcements');\n              \n              const announce = () => {\n                if( this.connected ){\n                  console.log('[EMBEDDED] Connected, stopping announcements');\n                  return;\n                }\n                \n                attempts++;\n                if( attempts > maxAttempts ){\n                  console.log('[EMBEDDED] Max announcement attempts reached');\n                  return;\n                }\n                \n                console.log('[EMBEDDED] Announcing ready (attempt', attempts + '/' + maxAttempts + ')');\n                this.emit('__embedded_ready');\n                \n                setTimeout( announce, interval );\n              };\n              \n              announce();\n            }\n          };\n\n          // Initialize\n          window._wio.listen();\n          \n          // Start announcing readiness after a short delay\n          setTimeout(() => {\n            window._wio.announceReady();\n          }, 100);\n          \n          console.log('[EMBEDDED] WIO bridge initialized successfully');\n        }\n        catch( error ){\n          console.error('[EMBEDDED] Setup failed:', error);\n          \n          // Create minimal fallback\n          window._wio = {\n            error: error.toString(),\n            emit: function(){ console.error('[EMBEDDED] WIO failed to initialize'); },\n            on: function(){},\n            once: function(){},\n            off: function(){}\n          };\n        }\n\n        true;\n      })();\n    ";
     };
     return WIO;
 }());
