@@ -1073,9 +1073,9 @@ export default class WIO {
           }
 
           // Initialize
-          wio.listen()
+          window._wio.listen()
           // Start announcing readiness after a short delay
-          setTimeout(() => wio.announceReady(), 100)
+          setTimeout(() => window._wio.announceReady(), 100)
           
           console.log('[EMBEDDED] WIO bridge initialized successfully')
         }
