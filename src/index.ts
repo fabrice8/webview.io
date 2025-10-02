@@ -131,8 +131,7 @@ export default class WIO {
     this.Events = {}
     this.peer = { type: 'WEBVIEW', connected: false, embeddedReady: false }
 
-    if( options.type )
-      this.peer.type = options.type
+    if( options.type ) this.peer.type = options.type
   }
 
   debug( ...args: any[] ){
@@ -211,24 +210,19 @@ export default class WIO {
       this.connectionToken = generateToken()
 
       // Re-initiate connection for WEBVIEW type
-      if( this.peer.type === 'WEBVIEW' ){
-        this.startConnectionAttempt()
-      }
-
+      this.peer.type === 'WEBVIEW' && this.startConnectionAttempt()
       // For EMBEDDED type, announce readiness
-      if( this.peer.type === 'EMBEDDED' ){
-        this.announceEmbeddedReady()
-      }
+      this.peer.type === 'EMBEDDED' && this.announceEmbeddedReady()
 
       // Set timeout for this reconnection attempt
-      setTimeout(() => {
+      setTimeout( () => {
         if( this.peer.connected ) return
 
         this.reconnectAttempts < this.maxReconnectAttempts
             ? this.attemptReconnection()
             : this.fire('reconnection_failed', { attempts: this.reconnectAttempts })
-      }, this.options.connectionTimeout!)
-    }, delay)
+      }, this.options.connectionTimeout! )
+    }, delay )
   }
 
   // Start connection attempt with timeout and retries
@@ -257,10 +251,8 @@ export default class WIO {
         this.debug(`[${this.peer.type}] Connection attempt ${this.connectionAttempts}/${this.options.maxConnectionAttempts}`)
         this.emit('ping', { token: this.connectionToken })
       }
-      else {
-        this.stopConnectionAttempt()
-      }
-    }, this.options.connectionPingInterval!)
+      else this.stopConnectionAttempt()
+    }, this.options.connectionPingInterval! )
 
     // Set overall timeout
     this.connectionAttemptTimer = setTimeout(() => {
@@ -310,17 +302,15 @@ export default class WIO {
         this.debug(`[${this.peer.type}] Ready announcement attempt ${attempts}/${maxAttempts}`)
         this.emit('__embedded_ready')
       }
-      else {
-        this.stopEmbeddedReadyAnnouncement()
-      }
+      else this.stopEmbeddedReadyAnnouncement()
     }, this.options.connectionPingInterval!)
   }
 
   private stopEmbeddedReadyAnnouncement(){
-    if( this.embeddedReadyCheckInterval ){
-      clearInterval( this.embeddedReadyCheckInterval )
-      this.embeddedReadyCheckInterval = undefined
-    }
+    if( !this.embeddedReadyCheckInterval ) return
+
+    clearInterval( this.embeddedReadyCheckInterval )
+    this.embeddedReadyCheckInterval = undefined
   }
 
   // Message rate limiting
@@ -351,8 +341,8 @@ export default class WIO {
 
   // Queue messages when not connected
   private queueMessage( _event: string, payload?: any, fn?: AckFunction ){
+    // Remove oldest message
     if( this.messageQueue.length >= this.options.messageQueueSize! ){
-      // Remove oldest message
       const removed = this.messageQueue.shift()
       this.debug(`[${this.peer.type}] Message queue full, removed oldest message:`, removed?._event)
     }
@@ -413,6 +403,9 @@ export default class WIO {
 
   /**
    * Listening to connection from the WebView host
+   * 
+   * NOTE: This is called manually from page code, 
+   * not auto-initialized
    */
   listen( hostOrigin?: string ){
     this.peer.type = 'EMBEDDED'
@@ -423,9 +416,7 @@ export default class WIO {
     this.debug(`[${this.peer.type}] Listening to connect${hostOrigin ? `: Host <${hostOrigin}>` : ''}`)
 
     // Start announcing readiness
-    setTimeout(() => {
-      this.announceEmbeddedReady()
-    }, 100)
+    setTimeout( () => this.announceEmbeddedReady(), 100 )
 
     return this
   }
@@ -436,9 +427,9 @@ export default class WIO {
   handleMessage( event: { nativeEvent: { data: string } } ){
     try {
       const data = JSON.parse( event.nativeEvent.data )
-
       // Enhanced security: check valid message structure
-      if( typeof data !== 'object' || !data.hasOwnProperty('_event') ) return
+      if( typeof data !== 'object' || !data.hasOwnProperty('_event') )
+        return
 
       const { _event, payload, cid, timestamp, token } = data as MessageData
 
@@ -470,9 +461,10 @@ export default class WIO {
         this.debug(`[${this.peer.type}] Embedded peer ready`)
         
         // If we're WEBVIEW and not connected, send ping
-        if( this.peer.type === 'WEBVIEW' && !this.peer.connected ){
-          this.emit('ping', { token: this.connectionToken })
-        }
+        this.peer.type === 'WEBVIEW'
+        && !this.peer.connected
+        && this.emit('ping', { token: this.connectionToken })
+        
         return
       }
 
@@ -494,6 +486,7 @@ export default class WIO {
           // Don't set fully connected yet - wait for ack
           this.debug(`[${this.peer.type}] Received ping, sent pong`)
         }
+
         return
       }
 
@@ -522,6 +515,7 @@ export default class WIO {
           
           this.debug(`[${this.peer.type}] Connected (3-way handshake complete)`)
         }
+
         return
       }
 
@@ -546,6 +540,7 @@ export default class WIO {
           
           this.debug(`[${this.peer.type}] Connected (received ack)`)
         }
+
         return
       }
 
@@ -569,11 +564,11 @@ export default class WIO {
     }
 
     const ackFn = cid
-      ? ( error: boolean | string, ...args: any[] ): void => {
-          this.emit(`${_event}--${cid}--@ack`, { error: error || false, args })
-          return
-        }
-      : undefined
+                ? ( error: boolean | string, ...args: any[] ): void => {
+                    this.emit(`${_event}--${cid}--@ack`, { error: error || false, args })
+                    return
+                  }
+                : undefined
     let listeners: Listener[] = []
 
     if( this.Events[_event + '--@once'] ){
@@ -717,9 +712,7 @@ export default class WIO {
 
   emitAsync<T = any, R = any>( _event: string, payload?: T, timeout: number = 5000 ): Promise<R> {
     return new Promise(( resolve, reject ) => {
-      const timeoutId = setTimeout(() => {
-        reject( new Error(`Event '${_event}' acknowledgment timeout after ${timeout}ms`) )
-      }, timeout )
+      const timeoutId = setTimeout(() => reject( new Error(`Event '${_event}' acknowledgment timeout after ${timeout}ms`) ), timeout )
 
       try {
         this.emit( _event, payload, ( error, ...args ) => {
@@ -745,17 +738,17 @@ export default class WIO {
     return new Promise(( resolve, reject ) => {
       if( this.isConnected() ) return resolve()
 
-      const timeoutId = setTimeout(() => {
-        this.off('connect', connectHandler)
+      const timeoutId = setTimeout( () => {
+        this.off('connect', connectHandler )
         reject( new Error('Connection timeout') )
-      }, timeout || this.options.connectionTimeout)
+      }, timeout || this.options.connectionTimeout )
 
       const connectHandler = () => {
         clearTimeout( timeoutId )
         resolve()
       }
 
-      this.once('connect', connectHandler)
+      this.once('connect', connectHandler )
     })
   }
 
@@ -822,6 +815,7 @@ export default class WIO {
   /**
    * Get injected JavaScript for WebView
    * Sets up the EMBEDDED side of the bridge
+   * NOTE: Does not auto-initialize - page must call window._wio.listen()
    */
   getInjectedJavaScript(): string {
     return `
@@ -849,13 +843,18 @@ export default class WIO {
             setupComplete: false,
 
             listen: function(){
+              if( this.setupComplete ){
+                console.warn('[EMBEDDED] Already listening')
+                return this
+              }
+
               console.log('[EMBEDDED] Setting up message listeners...')
 
               // Listen to messages from React Native
               window.addEventListener('message', function( event ){
                 try {
                   const message = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data
-                  window._wio.handleMessage( message )  // Use window._wio instead of this
+                  window._wio.handleMessage( message )
                 }
                 catch( error ){ console.error('[EMBEDDED] Parse error:', error ) }
               })
@@ -865,16 +864,19 @@ export default class WIO {
                 document.addEventListener('message', function( event ){
                   try {
                     const message = typeof event.data === 'string' ? JSON.parse( event.data ) : event.data
-                    window._wio.handleMessage( message )  // Use window._wio instead of this
+                    window._wio.handleMessage( message )
                   }
                   catch( error ){ console.error('[EMBEDDED] Parse error:', error ) }
                 })
               }
 
-              window._wio.setupComplete = true  // Use window._wio instead of this
-              console.log('[EMBEDDED] Setup complete')
+              this.setupComplete = true
+              console.log('[EMBEDDED] Setup complete, starting ready announcements')
 
-              return window._wio
+              // Start announcing readiness
+              this.announceReady()
+
+              return this
             },
             
             ackId: function(){
@@ -1045,8 +1047,8 @@ export default class WIO {
             
             announceReady: function(){
               let attempts = 0
-              const maxAttempts = 5
-              const interval = 2000
+              const maxAttempts = 10
+              const interval = 1000
               
               console.log('[EMBEDDED] Starting ready announcements')
               
@@ -1072,12 +1074,7 @@ export default class WIO {
             }
           }
 
-          // Initialize
-          window._wio.listen()
-          // Start announcing readiness after a short delay
-          setTimeout(() => window._wio.announceReady(), 100)
-          
-          console.log('[EMBEDDED] WIO bridge initialized successfully')
+          console.log('[EMBEDDED] WIO bridge ready. Call window._wio.listen() to connect.')
         }
         catch( error ){
           console.error('[EMBEDDED] Setup failed:', error )
@@ -1085,6 +1082,7 @@ export default class WIO {
           // Create minimal fallback
           window._wio = {
             error: error.toString(),
+            listen: function(){ console.error('[EMBEDDED] WIO failed to initialize') },
             emit: function(){ console.error('[EMBEDDED] WIO failed to initialize') },
             on: function(){},
             once: function(){},

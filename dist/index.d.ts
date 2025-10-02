@@ -78,6 +78,9 @@ export default class WIO {
     initiate(webViewRef: RefObject<WebView>, origin: string): this;
     /**
      * Listening to connection from the WebView host
+     *
+     * NOTE: This is called manually from page code,
+     * not auto-initialized
      */
     listen(hostOrigin?: string): this;
     /**
@@ -115,6 +118,7 @@ export default class WIO {
     /**
      * Get injected JavaScript for WebView
      * Sets up the EMBEDDED side of the bridge
+     * NOTE: Does not auto-initialize - page must call window._wio.listen()
      */
     getInjectedJavaScript(): string;
 }
