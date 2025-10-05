@@ -821,7 +821,7 @@ export default class WIO {
     return `
       (function() {
         try {
-          console.log('[EMBEDDED] Initializing WIO bridge...')
+          console.debug('[EMBEDDED] Initializing WIO bridge...')
           
           const RESERVED_EVENTS = [
             'ping',
@@ -848,7 +848,7 @@ export default class WIO {
                 return this
               }
 
-              console.log('[EMBEDDED] Setting up message listeners...')
+              console.debug('[EMBEDDED] Setting up message listeners...')
 
               // Listen to messages from React Native
               window.addEventListener('message', function( event ){
@@ -871,7 +871,7 @@ export default class WIO {
               }
 
               this.setupComplete = true
-              console.log('[EMBEDDED] Setup complete, starting ready announcements')
+              console.debug('[EMBEDDED] Setup complete, starting ready announcements')
 
               // Start announcing readiness
               this.announceReady()
@@ -891,7 +891,7 @@ export default class WIO {
             
             fire: function( _event, payload, cid ){
               if( !window._wio.Events[_event] && !window._wio.Events[_event + '--@once'] ){
-                console.log('[EMBEDDED] No listener for:', _event)
+                console.debug('[EMBEDDED] No listener for:', _event)
                 return
               }
               
@@ -922,7 +922,7 @@ export default class WIO {
               
               if( !window._wio.connected && !RESERVED_EVENTS.includes(_event) ){
                 window._wio.messageQueue.push({ _event, payload, fn, timestamp: Date.now() })
-                console.log('[EMBEDDED] Queued message:', _event)
+                console.debug('[EMBEDDED] Queued message:', _event)
                 return
               }
               
@@ -983,7 +983,7 @@ export default class WIO {
             processMessageQueue: function(){
               if( !window._wio.connected || window._wio.messageQueue.length === 0 ) return
               
-              console.log('[EMBEDDED] Processing', window._wio.messageQueue.length, 'queued messages')
+              console.debug('[EMBEDDED] Processing', window._wio.messageQueue.length, 'queued messages')
               const queue = [ ...window._wio.messageQueue ]
               window._wio.messageQueue = []
               
@@ -998,7 +998,7 @@ export default class WIO {
               
               const { _event, payload, cid, token } = data
               
-              console.log('[EMBEDDED] Received:', _event )
+              console.debug('[EMBEDDED] Received:', _event )
               
               // Handle heartbeat response
               if( _event === '__heartbeat_response' )
@@ -1012,13 +1012,13 @@ export default class WIO {
               
               // Handle webview ready signal
               if( _event === '__webview_ready' ){
-                console.log('[EMBEDDED] WebView ready signal received')
+                console.debug('[EMBEDDED] WebView ready signal received')
                 return
               }
               
               // Handle ping from WEBVIEW
               if( _event === 'ping' ){
-                console.log('[EMBEDDED] Received ping, sending pong')
+                console.debug('[EMBEDDED] Received ping, sending pong')
                 window._wio.connectionToken = token
 
                 window._wio.emit('pong', { token: window._wio.connectionToken })
@@ -1032,7 +1032,7 @@ export default class WIO {
                   return
                 }
                 
-                console.log('[EMBEDDED] Connection established (received ack)')
+                console.debug('[EMBEDDED] Connection established (received ack)')
 
                 window._wio.connected = true
                 window._wio.processMessageQueue()
@@ -1050,21 +1050,21 @@ export default class WIO {
               const maxAttempts = 10
               const interval = 1000
               
-              console.log('[EMBEDDED] Starting ready announcements')
+              console.debug('[EMBEDDED] Starting ready announcements')
               
               const announce = () => {
                 if( window._wio.connected ){
-                  console.log('[EMBEDDED] Connected, stopping announcements')
+                  console.debug('[EMBEDDED] Connected, stopping announcements')
                   return
                 }
                 
                 attempts++
                 if( attempts > maxAttempts ){
-                  console.log('[EMBEDDED] Max announcement attempts reached')
+                  console.debug('[EMBEDDED] Max announcement attempts reached')
                   return
                 }
                 
-                console.log('[EMBEDDED] Announcing ready (attempt', attempts + '/' + maxAttempts + ')')
+                console.debug('[EMBEDDED] Announcing ready (attempt', attempts + '/' + maxAttempts + ')')
                 window._wio.emit('__embedded_ready')
                 
                 setTimeout( announce, interval )
@@ -1074,7 +1074,7 @@ export default class WIO {
             }
           }
 
-          console.log('[EMBEDDED] WIO bridge ready. Call window._wio.listen() to connect.')
+          console.debug('[EMBEDDED] WIO bridge ready. Call window._wio.listen() to connect.')
         }
         catch( error ){
           console.error('[EMBEDDED] Setup failed:', error )
