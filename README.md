@@ -106,9 +106,11 @@ function MapComponent() {
 
 ```javascript
 // In your HTML/JS loaded in the WebView
+// The bridge is automatically available as window._wio after injection
 
-// The bridge is automatically available as window._wio
+// IMPORTANT: You must manually call listen() to start the connection
 const wio = window._wio
+wio.listen() // Required to initiate connection handshake
 
 // Handle connection
 wio.on('connect', () => {
@@ -180,11 +182,27 @@ This prevents:
 - Fires `connect_timeout` event if all attempts fail
 
 **EMBEDDED Side:**
-- Automatically announces `__embedded_ready` when loaded
+- Bridge is available as `window._wio` after injection
+- **Must manually call `window._wio.listen()` to start connection**
+- Automatically announces `__embedded_ready` when `listen()` is called
 - Retries announcement every 2 seconds until connected
 - Handles race condition if loaded before React Native
 - Responds to `ping` with `pong` containing same token
 - Confirms connection upon receiving `__connection_ack`
+
+## Reserved Events
+
+The library uses several internal events for connection management. These events are handled automatically and **bypass normal message queuing** to ensure reliable connection establishment:
+
+- **`ping`** - Initial connection request from WEBVIEW
+- **`pong`** - Connection response from EMBEDDED
+- **`__heartbeat`** - Periodic health check request
+- **`__heartbeat_response`** - Health check response
+- **`__embedded_ready`** - EMBEDDED announces it's ready to connect
+- **`__connection_ack`** - Final handshake acknowledgment from WEBVIEW
+- **`__webview_ready`** - Signal that WEBVIEW peer is ready (currently logged but not actively used)
+
+**Important:** These events are sent immediately even when disconnected, unlike regular events which are queued. Do not use these event names for your application logic.
 
 ## Async/Await Support
 
@@ -231,7 +249,7 @@ console.log('User data received:', userData)
 ### Connection Timeout Handling
 
 ```javascript
-// Handle connection timeout (new event)
+// Handle connection timeout
 wio.on('connect_timeout', ({ attempts }) => {
   console.log(`Failed to connect after ${attempts} attempts`)
   // Optionally retry manually or show error to user
@@ -267,13 +285,13 @@ const stats = wio.getStats()
 console.log(stats)
 // {
 //   connected: true,
-//   embeddedReady: true,              // NEW: EMBEDDED peer readiness state
+//   embeddedReady: true,              // EMBEDDED peer readiness state
 //   peerType: 'WEBVIEW',
 //   origin: 'https://example.com',
 //   lastHeartbeat: 1609459200000,
 //   queuedMessages: 0,
 //   reconnectAttempts: 0,
-//   connectionAttempts: 0,            // NEW: Current connection attempts
+//   connectionAttempts: 0,            // Current connection attempts
 //   activeListeners: 5,
 //   messageRate: 2
 // }
@@ -288,7 +306,7 @@ Each connection uses a unique token for validation:
 ```javascript
 // Automatically generated and validated during handshake
 // Prevents accepting messages from previous connections
-// Tokens are only used for connection-related events
+// Tokens are only used for reserved connection events
 ```
 
 ### Origin Validation
@@ -356,6 +374,7 @@ wio.on('error', (error) => {
 
 ```javascript
 // Messages are automatically queued when disconnected
+// Reserved events bypass the queue for reliable connection handling
 wio.emit('important-data', { data: 'This will be queued if disconnected' })
 
 // Clear queue manually if needed
@@ -382,7 +401,7 @@ console.log(`${stats.queuedMessages} messages queued`)
 
 #### Connection Methods
 - **`initiate(webViewRef, origin)`** - Establish connection with retry logic (WEBVIEW peer only)
-- **`listen(hostOrigin?)`** - Listen for connection with readiness announcement (EMBEDDED peer only)
+- **`listen(hostOrigin?)`** - Start listening for connection (EMBEDDED peer only). The `hostOrigin` parameter is informational only and used for logging - no validation is performed.
 - **`handleMessage(event)`** - Handle incoming message from WebView
 - **`disconnect(callback?)`** - Disconnect and cleanup all resources
 - **`isConnected()`** - Check connection status
@@ -399,15 +418,19 @@ console.log(`${stats.queuedMessages} messages queued`)
 #### Connection Events
 - **`connect`** - Connection established (after 3-way handshake)
 - **`disconnect`** - Connection lost with reason
-- **`connect_timeout`** - Initial connection failed after all attempts (NEW)
+- **`connect_timeout`** - Initial connection failed after all attempts
 - **`reconnecting`** - Reconnection attempt started
 - **`reconnection_failed`** - All reconnection attempts failed
 
-#### Internal Events (handled automatically)
+#### Reserved Internal Events
+These events are handled automatically by the library. Do not use these names for your application events:
+- **`ping`** - Connection initiation from WEBVIEW
+- **`pong`** - Connection response from EMBEDDED
 - **`__embedded_ready`** - EMBEDDED peer announces readiness
 - **`__connection_ack`** - Final acknowledgment in 3-way handshake
-- **`__heartbeat`** - Connection health check
+- **`__heartbeat`** - Connection health check request
 - **`__heartbeat_response`** - Heartbeat response
+- **`__webview_ready`** - WEBVIEW ready signal (informational)
 
 #### Error Events
 - **`error`** - Various error conditions with detailed error objects
@@ -600,12 +623,13 @@ const response = await wio.emitAsync<{ query: string }, ApiResponse>(
 **Symptoms:** `connect_timeout` event fires, connection never succeeds
 
 **Solutions:**
-1. Check that `injectedJavaScript` is properly set on WebView
-2. Verify `javaScriptEnabled={true}` is set
-3. Check browser console for JavaScript errors in WebView
-4. Ensure origin matches exactly (including protocol)
-5. Increase `connectionTimeout` for slow networks
-6. Check that WebView content loads successfully
+1. **Verify `listen()` is called** - The EMBEDDED side must manually call `window._wio.listen()` to start the connection
+2. Check that `injectedJavaScript` is properly set on WebView
+3. Verify `javaScriptEnabled={true}` is set
+4. Check browser console for JavaScript errors in WebView
+5. Ensure origin matches exactly (including protocol)
+6. Increase `connectionTimeout` for slow networks
+7. Check that WebView content loads successfully
 
 ### Messages Not Received
 
@@ -617,6 +641,7 @@ const response = await wio.emitAsync<{ query: string }, ApiResponse>(
 3. Look for errors in `error` event listener
 4. Check if rate limiting is being exceeded
 5. Verify message size is under `maxMessageSize`
+6. Ensure you're not using reserved event names
 
 ### Frequent Disconnections
 
@@ -637,7 +662,7 @@ const response = await wio.emitAsync<{ query: string }, ApiResponse>(
 - Already handled! The three-way handshake with readiness announcements prevents this
 - EMBEDDED announces readiness periodically until connected
 - WEBVIEW retries connection attempts automatically
-- No action needed from your side
+- Just ensure `window._wio.listen()` is called in your WebView code
 
 ## Differences from iframe.io
 
@@ -647,6 +672,7 @@ const response = await wio.emitAsync<{ query: string }, ApiResponse>(
 - **Initialization**: Uses `RefObject<WebView>` instead of `Window` object
 - **Message Handling**: Requires explicit `handleMessage()` call in `onMessage` prop
 - **Injected Script**: Uses `getInjectedJavaScript()` to setup bridge in WebView
+- **Manual Connection**: EMBEDDED side must call `listen()` to start connection
 - **No DOM Dependencies**: Works in React Native environment without DOM APIs
 - **Enhanced Handshake**: Three-way handshake with token validation for mobile reliability
 - **Connection Retry**: Built-in retry logic for spotty mobile connections
