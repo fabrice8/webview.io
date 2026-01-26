@@ -144,7 +144,11 @@ const wio = new WIO({
   autoReconnect: true,               // Enable automatic reconnection
   messageQueueSize: 50,              // Max queued messages when disconnected
   allowedIncomingEvents: ['hello', 'response'], // Optional incoming event allowlist (non-reserved events)
-  validateIncoming: (event, payload) => true    // Optional custom incoming validator
+  validateIncoming: (event, payload) => true,   // Optional custom incoming validator
+  cryptoAuth: {                                 // Optional cryptographic message authentication (HMAC-SHA256)
+    secret: 'replace-with-shared-secret',
+    requireSigned: false
+  }
 })
 ```
 
@@ -353,6 +357,24 @@ wio.on('error', (error) => {
     console.warn('Dropped incoming message:', error)
   }
 })
+```
+
+### Cryptographic Message Authentication (HMAC)
+
+If you need **message integrity/authenticity** beyond the default transport guarantees, enable `cryptoAuth` and use the signed APIs. This adds an HMAC-SHA256 signature + timestamp + nonce (with basic replay protection).
+
+**Important security note:** if your WebView loads untrusted content, that content can read the shared secret. This protects against some injection/misrouting scenarios—but not against a fully compromised WebView page.
+
+```javascript
+// React Native side
+const wio = new WIO({
+  type: 'WEBVIEW',
+  cryptoAuth: { secret: 'replace-with-shared-secret', requireSigned: true }
+})
+
+// Send signed
+await wio.emitSigned('hello', { msg: 'signed' })
+const reply = await wio.emitAsyncSigned('getData', { id: 123 }, 5000)
 ```
 
 ### Rate Limiting
@@ -625,6 +647,8 @@ const response = await wio.emitAsync<{ query: string }, ApiResponse>(
 | `LISTENER_ERROR` | Error in event listener |
 | `DISALLOWED_EVENT` | Incoming event rejected by `allowedIncomingEvents` |
 | `INVALID_MESSAGE` | Incoming message rejected by `validateIncoming` |
+| `AUTH_FAILED` | Incoming message failed cryptographic authentication |
+| `AUTH_ERROR` | Cryptographic verification errored (missing crypto, etc.) |
 | `RATE_LIMIT_EXCEEDED` | Too many messages sent |
 | `NO_CONNECTION` | Attempted to send without connection |
 

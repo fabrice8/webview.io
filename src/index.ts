@@ -6,6 +6,31 @@ export type PeerType = 'WEBVIEW' | 'EMBEDDED'
 export type AckFunction = ( error: boolean | string, ...args: any[] ) => void
 export type Listener = ( payload?: any, ack?: AckFunction ) => void
 
+export type CryptoAuthOptions = {
+  /**
+   * Shared secret used for HMAC-SHA256 signing.
+   *
+   * IMPORTANT: If an attacker can execute JS in either peer, they can read the secret.
+   * This is for authenticity/integrity between cooperating peers, not a sandbox boundary.
+   */
+  secret: string
+  /**
+   * If true, drop any incoming message that doesn't carry valid auth.
+   * Default: false (accept unsigned messages)
+   */
+  requireSigned?: boolean
+  /**
+   * Maximum allowed clock skew for signed messages (ms).
+   * Default: 2 minutes
+   */
+  maxSkewMs?: number
+  /**
+   * Replay window size (max number of nonces kept in memory).
+   * Default: 500
+   */
+  replayWindowSize?: number
+}
+
 export type Options = {
   type?: PeerType
   debug?: boolean
@@ -27,6 +52,12 @@ export type Options = {
    * Return false to drop a message; an 'error' event will be emitted.
    */
   validateIncoming?: ( event: string, payload: any ) => boolean
+  /**
+   * Optional cryptographic message authentication (HMAC-SHA256).
+   * When enabled, use `emitSigned` / `emitAsyncSigned` to send signed messages.
+   * For EMBEDDED (WebView content) you must set the secret in injected bridge too (handled by `getInjectedJavaScript()` when configured).
+   */
+  cryptoAuth?: CryptoAuthOptions
 }
 
 export interface RegisteredEvents {
@@ -49,6 +80,12 @@ export type MessageData = {
   timestamp?: number
   size?: number
   token?: string
+  auth?: {
+    alg: 'HMAC-SHA256'
+    ts: number
+    nonce: string
+    sig: string
+  }
 }
 
 export type Message = {
@@ -82,6 +119,77 @@ function sanitizePayload( payload: any, maxSize: number ): any {
   return JSON.parse( JSON.stringify( payload ) )
 }
 
+function constantTimeEqual( a: string, b: string ): boolean {
+  if( a.length !== b.length ) return false
+  let out = 0
+  for( let i = 0; i < a.length; i++ ) out |= a.charCodeAt( i ) ^ b.charCodeAt( i )
+  return out === 0
+}
+
+function getGlobalCrypto(){
+  return (typeof crypto !== 'undefined'
+    ? crypto
+    : (typeof window !== 'undefined' && (window as any).crypto)
+      || (typeof globalThis !== 'undefined' && (globalThis as any).crypto))
+}
+
+function randomHex( bytes: number ): string {
+  try {
+    const globalCrypto = getGlobalCrypto()
+    if( globalCrypto && typeof globalCrypto.getRandomValues === 'function' ){
+      const buf = new Uint8Array( bytes )
+      globalCrypto.getRandomValues( buf )
+      return Array.from( buf ).map( b => b.toString( 16 ).padStart( 2, '0' ) ).join('')
+    }
+  }
+  catch{}
+
+  // Fallback (NOT cryptographically strong)
+  return Array.from({ length: bytes }, () => Math.floor( Math.random() * 256 ).toString( 16 ).padStart( 2, '0' ) ).join('')
+}
+
+async function hmacSha256Base64Url( secret: string, message: string ): Promise<string> {
+  // Browser/WebCrypto (useful for EMBEDDED web content)
+  try {
+    const globalCrypto = getGlobalCrypto() as any
+    const subtle = globalCrypto?.subtle
+    if( subtle && typeof subtle.importKey === 'function' ){
+      const enc = new TextEncoder()
+      const key = await subtle.importKey(
+        'raw',
+        enc.encode( secret ),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      )
+      const sig = await subtle.sign( 'HMAC', key, enc.encode( message ) )
+      const bytes = new Uint8Array( sig )
+      let bin = ''
+      for( let i = 0; i < bytes.length; i++ ) bin += String.fromCharCode( bytes[i] )
+      const b64 = btoa( bin )
+      return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+    }
+  }
+  catch{
+    // fallthrough to Node implementation
+  }
+
+  // Node.js (commonjs) - optional (React Native metro can provide crypto polyfills in some setups)
+  try {
+    const nodeCrypto = (globalThis as any).__wio_node_crypto
+      || ((globalThis as any).__wio_node_crypto = (typeof (globalThis as any).require === 'function'
+        ? (globalThis as any).require('crypto')
+        : undefined))
+
+    if( !nodeCrypto ) throw new Error('node crypto unavailable')
+
+    const b64 = nodeCrypto.createHmac('sha256', secret).update( message ).digest('base64')
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+  }
+  catch{
+    throw new Error('No crypto implementation available for HMAC-SHA256')
+  }
+}
 const ackId = () => {
   const
   rmin = 100000,
@@ -140,6 +248,7 @@ export default class WIO {
   private maxReconnectAttempts: number = 5
   private connectionToken?: string
   private connectionAttempts: number = 0
+  private seenNonces: Map<string, number> = new Map()
 
   constructor( options: Options = {} ){
     if( options && typeof options !== 'object' )
@@ -163,6 +272,82 @@ export default class WIO {
     if( options.type ) this.peer.type = options.type
   }
 
+  private cryptoCfg(){
+    if( !this.options.cryptoAuth ) return undefined
+    return {
+      secret: this.options.cryptoAuth.secret,
+      requireSigned: !!this.options.cryptoAuth.requireSigned,
+      maxSkewMs: this.options.cryptoAuth.maxSkewMs ?? 2 * 60 * 1000,
+      replayWindowSize: this.options.cryptoAuth.replayWindowSize ?? 500
+    }
+  }
+
+  private pruneNonces( maxSize: number ){
+    if( this.seenNonces.size <= maxSize ) return
+    const toRemove = this.seenNonces.size - maxSize
+    let i = 0
+    const keys = Array.from( this.seenNonces.keys() )
+    for( let k = 0; k < keys.length; k++ ){
+      const key = keys[k]
+      this.seenNonces.delete( key )
+      i++
+      if( i >= toRemove ) break
+    }
+  }
+
+  private async signOutgoing( messageData: Omit<MessageData, 'auth'> ): Promise<MessageData['auth']> {
+    const cfg = this.cryptoCfg()
+    if( !cfg ) return undefined
+
+    const ts = Date.now()
+    const nonce = randomHex( 16 )
+    const canonical = JSON.stringify({
+      _event: messageData._event,
+      payload: messageData.payload,
+      cid: messageData.cid,
+      timestamp: messageData.timestamp,
+      size: messageData.size,
+      token: messageData.token,
+      ts,
+      nonce
+    })
+    const sig = await hmacSha256Base64Url( cfg.secret, canonical )
+
+    return { alg: 'HMAC-SHA256', ts, nonce, sig }
+  }
+
+  private async verifyIncomingAuth( data: MessageData ): Promise<boolean> {
+    const cfg = this.cryptoCfg()
+    if( !cfg ) return true
+
+    if( !data.auth ){
+      return !cfg.requireSigned
+    }
+
+    const { alg, ts, nonce, sig } = data.auth
+    if( alg !== 'HMAC-SHA256' ) return false
+    if( typeof ts !== 'number' || typeof nonce !== 'string' || typeof sig !== 'string' ) return false
+
+    const now = Date.now()
+    if( Math.abs( now - ts ) > cfg.maxSkewMs ) return false
+
+    if( this.seenNonces.has( nonce ) ) return false
+    this.seenNonces.set( nonce, ts )
+    this.pruneNonces( cfg.replayWindowSize )
+
+    const canonical = JSON.stringify({
+      _event: data._event,
+      payload: data.payload,
+      cid: data.cid,
+      timestamp: data.timestamp,
+      size: data.size,
+      token: data.token,
+      ts,
+      nonce
+    })
+    const expected = await hmacSha256Base64Url( cfg.secret, canonical )
+    return constantTimeEqual( expected, sig )
+  }
   debug( ...args: any[] ){
     this.options.debug && console.debug( ...args )
   }
@@ -573,6 +758,44 @@ export default class WIO {
         return
       }
 
+      // Cryptographic authentication (optional)
+      if( this.options.cryptoAuth ){
+        this.verifyIncomingAuth( data as MessageData )
+          .then( ok => {
+            if( !ok ){
+              this.fire('error', { type: 'AUTH_FAILED', event: _event })
+              return
+            }
+
+            // Optional application-level incoming validation (non-reserved events only)
+            if( !RESERVED_EVENTS.includes( _event ) ){
+              if( this.options.allowedIncomingEvents
+                  && !this.options.allowedIncomingEvents.includes( _event ) ){
+                this.fire('error', {
+                  type: 'DISALLOWED_EVENT',
+                  direction: 'incoming',
+                  event: _event
+                })
+                return
+              }
+
+              if( this.options.validateIncoming
+                  && !this.options.validateIncoming( _event, payload ) ){
+                this.fire('error', {
+                  type: 'INVALID_MESSAGE',
+                  direction: 'incoming',
+                  event: _event
+                })
+                return
+              }
+            }
+
+            this.fire( _event, payload, cid )
+          })
+          .catch( error => this.fire('error', { type: 'AUTH_ERROR', event: _event, error: String(error) }) )
+        return
+      }
+
       // Optional application-level incoming validation (non-reserved events only)
       if( !RESERVED_EVENTS.includes( _event ) ){
         if( this.options.allowedIncomingEvents
@@ -709,6 +932,90 @@ export default class WIO {
     }
 
     return this
+  }
+
+  /**
+   * Send a signed message (HMAC-SHA256) when `options.cryptoAuth` is configured.
+   * This is async because WebCrypto signing is async.
+   */
+  async emitSigned<T = any>( _event: string, payload?: T | AckFunction, fn?: AckFunction ): Promise<this> {
+    if( !this.checkRateLimit() ) return this
+
+    if( !this.options.cryptoAuth ){
+      this.emit( _event as any, payload as any, fn )
+      return this
+    }
+
+    if( !this.isConnected() && !RESERVED_EVENTS.includes(_event) ){
+      this.queueMessage( _event, payload, fn )
+      return this
+    }
+
+    if( !this.peer.webViewRef ){
+      this.fire('error', { type: 'NO_CONNECTION', event: _event })
+      return this
+    }
+
+    if( typeof payload == 'function' ){
+      fn = payload as AckFunction
+      payload = undefined
+    }
+
+    try {
+      const sanitizedPayload = payload
+        ? sanitizePayload( payload, this.options.maxMessageSize! )
+        : payload
+
+      let cid: string | undefined
+      if( typeof fn === 'function' ){
+        const ackFunction = fn
+        cid = ackId()
+        this.once(`${_event}--${cid}--@ack`, ({ error, args }) => ackFunction( error, ...args ))
+      }
+
+      const unsigned: Omit<MessageData, 'auth'> = {
+        _event,
+        payload: sanitizedPayload,
+        cid,
+        timestamp: Date.now(),
+        size: getMessageSize( sanitizedPayload ),
+        token: RESERVED_EVENTS.includes(_event) ? this.connectionToken : undefined
+      }
+
+      const auth = await this.signOutgoing( unsigned )
+      const messageData: MessageData = { ...unsigned, auth }
+
+      this.peer.webViewRef.current?.postMessage( JSON.stringify( newObject( messageData ) ) )
+    }
+    catch( error ){
+      this.debug(`[${this.peer.type}] EmitSigned error:`, error)
+      this.fire('error', {
+        type: 'EMIT_ERROR',
+        event: _event,
+        error: error instanceof Error ? error.message : String(error)
+      })
+
+      typeof fn === 'function'
+      && fn( error instanceof Error ? error.message : String(error) )
+    }
+
+    return this
+  }
+
+  async emitAsyncSigned<T = any, R = any>( _event: string, payload?: T, timeout: number = 5000 ): Promise<R> {
+    return new Promise(( resolve, reject ) => {
+      const timeoutId = setTimeout(() => reject( new Error(`Event '${_event}' acknowledgment timeout after ${timeout}ms`) ), timeout )
+
+      this.emitSigned( _event, payload as any, ( error, ...args ) => {
+        clearTimeout( timeoutId )
+        error
+          ? reject( new Error( typeof error === 'string' ? error : 'Ack error' ) )
+          : resolve( args.length === 0 ? undefined : args.length === 1 ? args[0] : args as any )
+      }).catch( err => {
+        clearTimeout( timeoutId )
+        reject( err )
+      })
+    })
   }
 
   on( _event: string, fn: Listener ){
@@ -870,6 +1177,7 @@ export default class WIO {
    * NOTE: Does not auto-initialize - page must call window._wio.listen()
    */
   getInjectedJavaScript(): string {
+    const authSecret = this.options.cryptoAuth?.secret
     return `
       (function() {
         try {
@@ -892,7 +1200,11 @@ export default class WIO {
             Events: {},
             messageQueue: [],
             connectionToken: null,
+            authSecret: ${authSecret ? JSON.stringify(authSecret) : 'null'},
             setupComplete: false,
+            seenNonces: new Map(),
+            maxSkewMs: ${(this.options.cryptoAuth?.maxSkewMs ?? 2 * 60 * 1000)},
+            replayWindowSize: ${(this.options.cryptoAuth?.replayWindowSize ?? 500)},
 
             listen: function(){
               if( this.setupComplete ){
@@ -1002,6 +1314,46 @@ export default class WIO {
                 typeof fn === 'function' && fn( String(error) )
               }
             },
+
+            emitSigned: async function( _event, payload, fn ){
+              if( typeof payload === 'function' ){
+                fn = payload
+                payload = undefined
+              }
+
+              if( !window._wio.connected && !RESERVED_EVENTS.includes(_event) ){
+                window._wio.messageQueue.push({ _event, payload, fn, timestamp: Date.now(), signed: true })
+                console.debug('[EMBEDDED] Queued signed message:', _event)
+                return
+              }
+
+              try {
+                let cid
+                if( typeof fn === 'function' ){
+                  cid = window._wio.ackId()
+                  window._wio.once( _event + '--' + cid + '--@ack', ({ error, args }) => fn( error, ...args ) )
+                }
+
+                const unsigned = {
+                  _event,
+                  payload,
+                  cid,
+                  timestamp: Date.now(),
+                  token: RESERVED_EVENTS.includes(_event) ? window._wio.connectionToken : undefined
+                }
+
+                const auth = await window._wio.sign(unsigned)
+                const messageData = { ...unsigned, auth }
+
+                if( typeof window.ReactNativeWebView !== 'undefined' )
+                  window.ReactNativeWebView.postMessage( JSON.stringify( messageData ) )
+                else console.error('[EMBEDDED] ReactNativeWebView not available')
+              }
+              catch( error ){
+                console.error('[EMBEDDED] EmitSigned error:', error )
+                typeof fn === 'function' && fn( String(error) )
+              }
+            },
             
             on: function( _event, fn ){
               if( !window._wio.Events[_event] ) window._wio.Events[_event] = []
@@ -1040,9 +1392,107 @@ export default class WIO {
               window._wio.messageQueue = []
               
               queue.forEach( msg => {
-                try { window._wio.emit( msg._event, msg.payload, msg.fn ) }
+                try {
+                  msg.signed
+                    ? window._wio.emitSigned( msg._event, msg.payload, msg.fn )
+                    : window._wio.emit( msg._event, msg.payload, msg.fn )
+                }
                 catch( error ){ console.error('[EMBEDDED] Queue process error:', error ) }
               })
+            },
+
+            pruneNonces: function(){
+              if( window._wio.seenNonces.size <= window._wio.replayWindowSize ) return
+              const toRemove = window._wio.seenNonces.size - window._wio.replayWindowSize
+              let i = 0
+              for( const key of window._wio.seenNonces.keys() ){
+                window._wio.seenNonces.delete( key )
+                i++
+                if( i >= toRemove ) break
+              }
+            },
+
+            constantTimeEqual: function(a, b){
+              if( a.length !== b.length ) return false
+              let out = 0
+              for( let i = 0; i < a.length; i++ ) out |= a.charCodeAt(i) ^ b.charCodeAt(i)
+              return out === 0
+            },
+
+            hmacSha256Base64Url: async function(secret, message){
+              if( !secret ) throw new Error('Missing auth secret')
+              if( !window.crypto || !window.crypto.subtle ) throw new Error('WebCrypto unavailable')
+
+              const enc = new TextEncoder()
+              const key = await window.crypto.subtle.importKey(
+                'raw',
+                enc.encode(secret),
+                { name: 'HMAC', hash: 'SHA-256' },
+                false,
+                ['sign']
+              )
+              const sig = await window.crypto.subtle.sign('HMAC', key, enc.encode(message))
+              const bytes = new Uint8Array(sig)
+              let bin = ''
+              for( let i = 0; i < bytes.length; i++ ) bin += String.fromCharCode(bytes[i])
+              const b64 = btoa(bin).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '')
+              return b64
+            },
+
+            sign: async function(unsigned){
+              if( !window._wio.authSecret ) return null
+              const ts = Date.now()
+              const nonce = (function(){
+                try {
+                  if( window.crypto && window.crypto.getRandomValues ){
+                    const buf = new Uint8Array(16)
+                    window.crypto.getRandomValues(buf)
+                    let out = ''
+                    for( let i = 0; i < buf.length; i++ ){
+                      out += ('0' + buf[i].toString(16)).slice(-2)
+                    }
+                    return out
+                  }
+                } catch(e){}
+                return (Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)).slice(0, 32)
+              })()
+              const canonical = JSON.stringify({
+                _event: unsigned._event,
+                payload: unsigned.payload,
+                cid: unsigned.cid,
+                timestamp: unsigned.timestamp,
+                token: unsigned.token,
+                ts,
+                nonce
+              })
+              const sig = await window._wio.hmacSha256Base64Url(window._wio.authSecret, canonical)
+              return { alg: 'HMAC-SHA256', ts, nonce, sig }
+            },
+
+            verify: async function(data){
+              if( !window._wio.authSecret ) return true
+              if( !data.auth ) return false
+              const { alg, ts, nonce, sig } = data.auth
+              if( alg !== 'HMAC-SHA256' ) return false
+
+              const now = Date.now()
+              if( Math.abs(now - ts) > window._wio.maxSkewMs ) return false
+
+              if( window._wio.seenNonces.has(nonce) ) return false
+              window._wio.seenNonces.set(nonce, ts)
+              window._wio.pruneNonces()
+
+              const canonical = JSON.stringify({
+                _event: data._event,
+                payload: data.payload,
+                cid: data.cid,
+                timestamp: data.timestamp,
+                token: data.token,
+                ts,
+                nonce
+              })
+              const expected = await window._wio.hmacSha256Base64Url(window._wio.authSecret, canonical)
+              return window._wio.constantTimeEqual(expected, sig)
             },
             
             handleMessage: function( data ){
@@ -1090,6 +1540,18 @@ export default class WIO {
                 window._wio.processMessageQueue()
                 window._wio.fire('connect')
 
+                return
+              }
+
+              // Auth verification (optional, if authSecret is set)
+              if( window._wio.authSecret ){
+                window._wio.verify(data).then(ok => {
+                  if( !ok ){
+                    console.error('[EMBEDDED] Auth verification failed for', _event)
+                    return
+                  }
+                  window._wio.fire( _event, payload, cid )
+                }).catch(err => console.error('[EMBEDDED] Auth error:', err))
                 return
               }
               
