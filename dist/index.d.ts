@@ -14,6 +14,16 @@ export type Options = {
     messageQueueSize?: number;
     connectionPingInterval?: number;
     maxConnectionAttempts?: number;
+    /**
+     * Optional allowlist of incoming application-level events.
+     * Reserved internal events (ping/pong/heartbeat/handshake) are always allowed.
+     */
+    allowedIncomingEvents?: string[];
+    /**
+     * Optional custom validator for incoming messages.
+     * Return false to drop a message; an 'error' event will be emitted.
+     */
+    validateIncoming?: (event: string, payload: any) => boolean;
 };
 export interface RegisteredEvents {
     [index: string]: Listener[];
