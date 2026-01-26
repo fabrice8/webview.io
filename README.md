@@ -142,7 +142,9 @@ const wio = new WIO({
   maxMessageSize: 1024 * 1024,       // Max message size in bytes (1MB)
   maxMessagesPerSecond: 100,         // Rate limit (100 messages/second)
   autoReconnect: true,               // Enable automatic reconnection
-  messageQueueSize: 50               // Max queued messages when disconnected
+  messageQueueSize: 50,              // Max queued messages when disconnected
+  allowedIncomingEvents: ['hello', 'response'], // Optional incoming event allowlist (non-reserved events)
+  validateIncoming: (event, payload) => true    // Optional custom incoming validator
 })
 ```
 
@@ -327,6 +329,29 @@ wio.emit('data', {
   text: 'Hello',
   func: () => {}, // Functions are automatically removed
   undef: undefined // Undefined values are automatically removed
+})
+```
+
+### Incoming Event Allowlist & Validation
+
+For defense-in-depth, you can restrict which **application-level** events are accepted and/or validate incoming payloads. Reserved internal events (handshake/heartbeat/readiness) are always allowed.
+
+```javascript
+const wio = new WIO({
+  type: 'WEBVIEW',
+  debug: true,
+  allowedIncomingEvents: ['get:location', 'location:picked'],
+  validateIncoming: (event, payload) => {
+    // Example: simple checks
+    if (event === 'location:picked') return payload && typeof payload.lat === 'number'
+    return true
+  }
+})
+
+wio.on('error', (error) => {
+  if (error.type === 'DISALLOWED_EVENT' || error.type === 'INVALID_MESSAGE') {
+    console.warn('Dropped incoming message:', error)
+  }
 })
 ```
 
@@ -598,6 +623,8 @@ const response = await wio.emitAsync<{ query: string }, ApiResponse>(
 | `MESSAGE_HANDLING_ERROR` | Error processing incoming message |
 | `EMIT_ERROR` | Error sending message |
 | `LISTENER_ERROR` | Error in event listener |
+| `DISALLOWED_EVENT` | Incoming event rejected by `allowedIncomingEvents` |
+| `INVALID_MESSAGE` | Incoming message rejected by `validateIncoming` |
 | `RATE_LIMIT_EXCEEDED` | Too many messages sent |
 | `NO_CONNECTION` | Attempted to send without connection |
 
