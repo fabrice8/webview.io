@@ -187,6 +187,18 @@ export default class WIO {
      * Get injected JavaScript for WebView
      * Sets up the EMBEDDED side of the bridge
      * NOTE: Does not auto-initialize - page must call window._wio.listen()
+     *
+     * Only `cryptoAuth` reaches the injected bridge. `allowedIncomingEvents`,
+     * `maxMessagesPerSecond` and the size limits are enforced by this class on
+     * what React Native accepts FROM the WebView, and have no counterpart at the
+     * other end — see "What is enforced on which side" in the README.
+     *
+     * The bridge also cannot validate the source of a message and never will:
+     * React Native delivers a native → web message as an ordinary `message`
+     * event on `window`, and a script inside the page can post an identical one.
+     * They are indistinguishable to the receiver. Anything executing in the
+     * WebView can therefore impersonate the host and read everything the host
+     * sends, `cryptoAuth` included — the secret is in this very script.
      */
     getInjectedJavaScript(): string;
 }

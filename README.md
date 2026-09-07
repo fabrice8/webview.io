@@ -305,6 +305,38 @@ console.log(stats)
 
 ## Security Features
 
+### What is enforced on which side
+
+This library has two ends and they are not equally protected. Worth reading before
+relying on any option below.
+
+| control | React Native side (the `WIO` class) | WebView side (the injected bridge) |
+|---|---|---|
+| `allowedIncomingEvents` | enforced | **not enforced** |
+| `maxMessagesPerSecond` | enforced | **not enforced** |
+| `maxMessageSize` / sanitization | enforced | **not enforced** |
+| origin validation | enforced | **not possible** — see below |
+| HMAC (`cryptoAuth`) | enforced | enforced |
+
+`getInjectedJavaScript()` passes only the `cryptoAuth` settings into the bridge it
+injects. Configuring `allowedIncomingEvents` or `maxMessagesPerSecond` on the class
+protects what React Native accepts **from** the WebView, and nothing else. If you need
+the WebView end to police what it accepts, do it in your own handlers for now.
+
+**The WebView side cannot validate origin, and no future version will change that.**
+React Native delivers a native → web message as an ordinary `message` event on `window`.
+A script running inside the page can post an identical event, and the two are
+indistinguishable to the receiver — there is no origin or source to compare. So any
+code executing in the WebView can impersonate the native host completely, and can also
+read every message the native side sends by adding its own listener.
+
+That is the real boundary: **the WebView page is inside the trust boundary, not outside
+it.** `cryptoAuth` does not move it either, since the shared secret is embedded in the
+injected script and readable by anything in the page. If the page loads third-party
+scripts, treat them as having full access to this channel, and keep anything you would
+not hand them — long-lived tokens especially — off it.
+
+
 ### Token-Based Authentication
 
 Each connection uses a unique token for validation:
@@ -318,11 +350,12 @@ Each connection uses a unique token for validation:
 ### Origin Validation
 
 ```javascript
-// Strict origin checking (React Native side)
+// Strict origin checking — React Native side ONLY
 wio.initiate(webViewRef, 'https://trusted-domain.com')
 
-// Messages from other origins are automatically rejected
-// No additional configuration needed
+// Messages reaching the React Native side from another origin are rejected.
+// The WebView side has no equivalent and cannot have one: see
+// "What is enforced on which side" above.
 ```
 
 ### Message Sanitization
