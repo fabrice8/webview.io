@@ -60,6 +60,7 @@ export interface RegisteredEvents {
 }
 export type Peer = {
     type: PeerType;
+    protocolVersion?: number;
     webViewRef?: RefObject<WebView>;
     origin?: string;
     connected?: boolean;
@@ -67,6 +68,7 @@ export type Peer = {
     embeddedReady?: boolean;
 };
 export type MessageData = {
+    v?: number;
     _event: string;
     payload: any;
     cid: string | undefined;
@@ -107,6 +109,15 @@ export default class WIO {
     private seenNonces;
     constructor(options?: Options);
     private cryptoCfg;
+    /**
+     * Forget nonces that can no longer be replayed, and only then cap the map.
+     *
+     * Age is what decides replayability: a captured message is refused once its
+     * `ts` falls outside maxSkewMs, so a nonce is only worth keeping that long.
+     * Pruning purely by count made the two defaults contradict each other — 500
+     * remembered nonces at the default 100 messages a second is five seconds of
+     * history guarding a two-minute acceptance window.
+     */
     private pruneNonces;
     private signOutgoing;
     private verifyIncomingAuth;

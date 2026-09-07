@@ -66,6 +66,7 @@ export interface RegisteredEvents {
 
 export type Peer = {
   type: PeerType
+  protocolVersion?: number
   webViewRef?: RefObject<WebView>
   origin?: string
   connected?: boolean
@@ -74,6 +75,7 @@ export type Peer = {
 }
 
 export type MessageData = {
+  v?: number // Protocol version
   _event: string
   payload: any
   cid: string | undefined
@@ -97,6 +99,36 @@ export type QueuedMessage = {
   payload: any
   fn?: AckFunction
   timestamp: number
+}
+
+// Current protocol version
+const PROTOCOL_VERSION = 1
+
+/**
+ * The exact fields, in the exact order, that a signature covers.
+ *
+ * Kept as data rather than written out at each call site because there are
+ * three implementations of this protocol — the class signing, the class
+ * verifying, and the hand-written bridge that getInjectedJavaScript() injects
+ * into the WebView — and they did not agree. The class signed over `size`; the
+ * injected bridge left it out of both its sign and its verify. Every signed
+ * message the native side sent was therefore refused by the WebView, in
+ * silence, for as long as cryptoAuth has existed.
+ *
+ * The injected bridge now interpolates this same array, so the three cannot
+ * drift apart again without changing one line.
+ */
+const CANONICAL_FIELDS = [ 'v', '_event', 'payload', 'cid', 'timestamp', 'size', 'token' ] as const
+
+function canonicalMessage( data: Record<string, any>, ts: number, nonce: string ): string {
+  const canonical: Record<string, any> = {}
+
+  for( const field of CANONICAL_FIELDS ) canonical[ field ] = data[ field ]
+
+  canonical.ts = ts
+  canonical.nonce = nonce
+
+  return JSON.stringify( canonical )
 }
 
 function newObject( data: object ){
@@ -282,36 +314,47 @@ export default class WIO {
     }
   }
 
+  /**
+   * Forget nonces that can no longer be replayed, and only then cap the map.
+   *
+   * Age is what decides replayability: a captured message is refused once its
+   * `ts` falls outside maxSkewMs, so a nonce is only worth keeping that long.
+   * Pruning purely by count made the two defaults contradict each other — 500
+   * remembered nonces at the default 100 messages a second is five seconds of
+   * history guarding a two-minute acceptance window.
+   */
   private pruneNonces( maxSize: number ){
+    const
+    cutoff = Date.now() - ( this.cryptoCfg()?.maxSkewMs ?? 2 * 60 * 1000 ),
+    stale: string[] = []
+
+    this.seenNonces.forEach( ( ts, nonce ) => { ts < cutoff && stale.push( nonce ) })
+    stale.forEach( nonce => this.seenNonces.delete( nonce ) )
+
     if( this.seenNonces.size <= maxSize ) return
-    const toRemove = this.seenNonces.size - maxSize
-    let i = 0
-    const keys = Array.from( this.seenNonces.keys() )
-    for( let k = 0; k < keys.length; k++ ){
-      const key = keys[k]
-      this.seenNonces.delete( key )
-      i++
-      if( i >= toRemove ) break
-    }
+
+    this.fire('error', {
+      type: 'REPLAY_WINDOW_EXCEEDED',
+      remembered: this.seenNonces.size,
+      maxSize
+    })
+
+    const
+    toRemove = this.seenNonces.size - maxSize,
+    keys = Array.from( this.seenNonces.keys() )
+
+    for( let k = 0; k < toRemove && k < keys.length; k++ )
+      this.seenNonces.delete( keys[k] )
   }
 
   private async signOutgoing( messageData: Omit<MessageData, 'auth'> ): Promise<MessageData['auth']> {
     const cfg = this.cryptoCfg()
     if( !cfg ) return undefined
 
-    const ts = Date.now()
-    const nonce = randomHex( 16 )
-    const canonical = JSON.stringify({
-      _event: messageData._event,
-      payload: messageData.payload,
-      cid: messageData.cid,
-      timestamp: messageData.timestamp,
-      size: messageData.size,
-      token: messageData.token,
-      ts,
-      nonce
-    })
-    const sig = await hmacSha256Base64Url( cfg.secret, canonical )
+    const
+    ts = Date.now(),
+    nonce = randomHex( 16 ),
+    sig = await hmacSha256Base64Url( cfg.secret, canonicalMessage( messageData, ts, nonce ) )
 
     return { alg: 'HMAC-SHA256', ts, nonce, sig }
   }
@@ -331,22 +374,18 @@ export default class WIO {
     const now = Date.now()
     if( Math.abs( now - ts ) > cfg.maxSkewMs ) return false
 
+    // The nonce is recorded only once the signature is known good: burning it
+    // here let an unsigned or badly signed message consume the nonce of a
+    // legitimate one still in flight.
     if( this.seenNonces.has( nonce ) ) return false
+
+    const expected = await hmacSha256Base64Url( cfg.secret, canonicalMessage( data, ts, nonce ) )
+    if( !constantTimeEqual( expected, sig ) ) return false
+
     this.seenNonces.set( nonce, ts )
     this.pruneNonces( cfg.replayWindowSize )
 
-    const canonical = JSON.stringify({
-      _event: data._event,
-      payload: data.payload,
-      cid: data.cid,
-      timestamp: data.timestamp,
-      size: data.size,
-      token: data.token,
-      ts,
-      nonce
-    })
-    const expected = await hmacSha256Base64Url( cfg.secret, canonical )
-    return constantTimeEqual( expected, sig )
+    return true
   }
   debug( ...args: any[] ){
     this.options.debug && console.debug( ...args )
@@ -645,7 +684,25 @@ export default class WIO {
       if( typeof data !== 'object' || !data.hasOwnProperty('_event') )
         return
 
-      const { _event, payload, cid, timestamp, token } = data as MessageData
+      const { v, _event, payload, cid, timestamp, token } = data as MessageData
+
+      /**
+       * A peer that predates versioning sends no `v`, so absence reads as 1
+       * rather than as a refusal. Only a peer speaking a NEWER protocol than
+       * this build understands is turned away.
+       */
+      const messageVersion = v || 1
+      if( messageVersion > PROTOCOL_VERSION ){
+        this.fire('error', {
+          type: 'UNSUPPORTED_VERSION',
+          received: messageVersion,
+          supported: PROTOCOL_VERSION
+        })
+        return
+      }
+
+      if( !this.peer.protocolVersion || this.peer.protocolVersion < messageVersion )
+        this.peer.protocolVersion = messageVersion
 
       // Validate origin if specified
       if( this.peer.origin && event.nativeEvent && 'origin' in event.nativeEvent ){
@@ -908,6 +965,7 @@ export default class WIO {
       }
 
       const messageData: MessageData = {
+        v: PROTOCOL_VERSION,
         _event,
         payload: sanitizedPayload,
         cid,
@@ -974,6 +1032,7 @@ export default class WIO {
       }
 
       const unsigned: Omit<MessageData, 'auth'> = {
+        v: PROTOCOL_VERSION,
         _event,
         payload: sanitizedPayload,
         cid,
@@ -1335,10 +1394,12 @@ export default class WIO {
                 }
 
                 const unsigned = {
+                  v: ${PROTOCOL_VERSION},
                   _event,
                   payload,
                   cid,
                   timestamp: Date.now(),
+                  size: (function(){ try { return JSON.stringify( payload ).length } catch(e){ return 0 } })(),
                   token: RESERVED_EVENTS.includes(_event) ? window._wio.connectionToken : undefined
                 }
 
@@ -1401,15 +1462,30 @@ export default class WIO {
               })
             },
 
+            canonicalFields: ${JSON.stringify( CANONICAL_FIELDS )},
+
+            // Must produce byte-identical output to canonicalMessage() on the
+            // native side — hence the shared field list above.
+            canonical: function( data, ts, nonce ){
+              const out = {}
+              window._wio.canonicalFields.forEach(function( field ){ out[field] = data[field] })
+              out.ts = ts
+              out.nonce = nonce
+              return JSON.stringify( out )
+            },
+
             pruneNonces: function(){
+              const cutoff = Date.now() - window._wio.maxSkewMs
+              const stale = []
+              window._wio.seenNonces.forEach(function( ts, nonce ){ if( ts < cutoff ) stale.push( nonce ) })
+              stale.forEach(function( nonce ){ window._wio.seenNonces.delete( nonce ) })
+
               if( window._wio.seenNonces.size <= window._wio.replayWindowSize ) return
+
               const toRemove = window._wio.seenNonces.size - window._wio.replayWindowSize
-              let i = 0
-              for( const key of window._wio.seenNonces.keys() ){
-                window._wio.seenNonces.delete( key )
-                i++
-                if( i >= toRemove ) break
-              }
+              const keys = Array.from( window._wio.seenNonces.keys() )
+              for( let k = 0; k < toRemove && k < keys.length; k++ )
+                window._wio.seenNonces.delete( keys[k] )
             },
 
             constantTimeEqual: function(a, b){
@@ -1456,16 +1532,7 @@ export default class WIO {
                 } catch(e){}
                 return (Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)).slice(0, 32)
               })()
-              const canonical = JSON.stringify({
-                _event: unsigned._event,
-                payload: unsigned.payload,
-                cid: unsigned.cid,
-                timestamp: unsigned.timestamp,
-                token: unsigned.token,
-                ts,
-                nonce
-              })
-              const sig = await window._wio.hmacSha256Base64Url(window._wio.authSecret, canonical)
+              const sig = await window._wio.hmacSha256Base64Url(window._wio.authSecret, window._wio.canonical(unsigned, ts, nonce))
               return { alg: 'HMAC-SHA256', ts, nonce, sig }
             },
 
@@ -1479,20 +1546,14 @@ export default class WIO {
               if( Math.abs(now - ts) > window._wio.maxSkewMs ) return false
 
               if( window._wio.seenNonces.has(nonce) ) return false
+
+              const expected = await window._wio.hmacSha256Base64Url(window._wio.authSecret, window._wio.canonical(data, ts, nonce))
+              if( !window._wio.constantTimeEqual(expected, sig) ) return false
+
               window._wio.seenNonces.set(nonce, ts)
               window._wio.pruneNonces()
 
-              const canonical = JSON.stringify({
-                _event: data._event,
-                payload: data.payload,
-                cid: data.cid,
-                timestamp: data.timestamp,
-                token: data.token,
-                ts,
-                nonce
-              })
-              const expected = await window._wio.hmacSha256Base64Url(window._wio.authSecret, canonical)
-              return window._wio.constantTimeEqual(expected, sig)
+              return true
             },
             
             handleMessage: function( data ){
