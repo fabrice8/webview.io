@@ -1,14 +1,14 @@
 {
   "name": "webview.io",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Easy and friendly API to connect and interact between React Native and WebView with enhanced security, reliability, and modern async/await support.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "private": false,
   "scripts": {
     "compile": "rimraf ./dist && tsc",
-    "test": "yarn run compile && node --test \"test/*.test.mjs\"",
-    "prepack": "yarn run compile"
+    "test": "npm run compile && node --test \"test/*.test.mjs\"",
+    "prepack": "npm run compile"
   },
   "dependencies": {
     "events": "^3.3.0"
