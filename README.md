@@ -143,7 +143,7 @@ const wio = new WIO({
   maxMessagesPerSecond: 100,         // Rate limit (100 messages/second)
   autoReconnect: true,               // Enable automatic reconnection
   messageQueueSize: 50,              // Max queued messages when disconnected
-  allowedIncomingEvents: ['hello', 'response'], // Optional incoming event allowlist (non-reserved events)
+  allowedIncomingEvents: ['hello', 'response'], // Optional incoming event allowlist (non-reserved events; acknowledgements always pass)
   validateIncoming: (event, payload) => true,   // Optional custom incoming validator
   cryptoAuth: {                                 // Optional cryptographic message authentication (HMAC-SHA256)
     secret: 'replace-with-shared-secret',
@@ -317,6 +317,13 @@ relying on any option below.
 | `maxMessageSize` / sanitization | enforced | **not enforced** |
 | origin validation | enforced | **not possible** — see below |
 | HMAC (`cryptoAuth`) | enforced | enforced |
+
+The allowlist covers events the peer **pushes** at you. It never covers an
+acknowledgement — the reply to a message you sent, delivered on
+`<event>--<cid>--@ack`, where the cid is minted per call and so can never appear
+in a list you wrote. Filtering those would leave every acknowledged `emit()` and
+every `emitAsync()` hanging until it timed out, while the peer saw a completed
+exchange.
 
 `getInjectedJavaScript()` passes only the `cryptoAuth` settings into the bridge it
 injects. Configuring `allowedIncomingEvents` or `maxMessagesPerSecond` on the class
