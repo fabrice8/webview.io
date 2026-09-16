@@ -209,6 +209,23 @@ var RESERVED_EVENTS = [
     '__connection_ack',
     '__webview_ready'
 ];
+/**
+ * An acknowledgement is a reply to a message this side sent, not an event the
+ * peer decided to push.
+ *
+ * `emit( event, payload, fn )` registers a one-shot listener under
+ * `<event>--<cid>--@ack` and the peer replies on that exact name. No host can
+ * put those names in `allowedIncomingEvents`: the cid is generated here, per
+ * call, and only exists for the lifetime of the round trip. Run them through
+ * the application-level filter and every acknowledged emit times out instead --
+ * `emitAsync` with it -- while the peer sees a completed exchange, which is
+ * silent in both directions and reads as a hung bridge.
+ *
+ * Letting them past the filter grants nothing: the only listener that can
+ * receive one is the one this side registered a moment earlier under a cid the
+ * peer had to be told, and all it does is settle that pending call.
+ */
+var isAcknowledgement = function (_event) { return _event.endsWith('--@ack'); };
 var WIO = /** @class */ (function () {
     function WIO(options) {
         if (options === void 0) { options = {}; }
@@ -695,7 +712,7 @@ var WIO = /** @class */ (function () {
                         return;
                     }
                     // Optional application-level incoming validation (non-reserved events only)
-                    if (!RESERVED_EVENTS.includes(_event_1)) {
+                    if (!RESERVED_EVENTS.includes(_event_1) && !isAcknowledgement(_event_1)) {
                         if (_this.options.allowedIncomingEvents
                             && !_this.options.allowedIncomingEvents.includes(_event_1)) {
                             _this.fire('error', {
@@ -721,7 +738,7 @@ var WIO = /** @class */ (function () {
                 return;
             }
             // Optional application-level incoming validation (non-reserved events only)
-            if (!RESERVED_EVENTS.includes(_event_1)) {
+            if (!RESERVED_EVENTS.includes(_event_1) && !isAcknowledgement(_event_1)) {
                 if (this.options.allowedIncomingEvents
                     && !this.options.allowedIncomingEvents.includes(_event_1)) {
                     this.fire('error', {
