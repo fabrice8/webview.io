@@ -803,6 +803,10 @@ var WIO = /** @class */ (function () {
             }
             catch (error) {
                 _this.debug("[".concat(_this.peer.type, "] Listener error for ").concat(_event, ":"), error);
+                // An `error` listener that throws would be handed its own error, and
+                // throw again, until the stack runs out
+                if (_event === 'error' || _event === 'error--@once')
+                    return;
                 _this.fire('error', {
                     type: 'LISTENER_ERROR',
                     event: _event,
@@ -1002,7 +1006,8 @@ var WIO = /** @class */ (function () {
         // Remove all listeners for event
         else
             delete this.Events[_event];
-        typeof fn == 'function' && fn();
+        // `fn` is the listener being removed: calling it here ran it once more,
+        // with no payload, as it was taken off
         this.debug("[".concat(this.peer.type, "] <").concat(_event, "> listener off"));
         return this;
     };
